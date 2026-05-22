@@ -1,0 +1,92 @@
+{
+  "meta": {
+    "name": "stremio-ai-knowledge",
+    "version": "1.0",
+    "description": "AI Agent Knowledge Base for Stremio Addon Development",
+    "updated": "2026-05-22"
+  },
+  "critical_versions": {
+    "node": ">=16",
+    "stremio-addon-sdk": "^1.6.10",
+    "cheerio": "^1.0.0",
+    "node-fetch": "^2.7.0"
+  },
+  "protocol": {
+    "routes": [
+      "/manifest.json",
+      "/catalog/{type}/{id}.json",
+      "/meta/{type}/{id}.json",
+      "/stream/{type}/{id}.json"
+    ]
+  },
+  "content_types": {
+    "channel": {
+      "description": "Multiple videos grouped under one entity. Use for models, collections, channels, performers.",
+      "usage": "A model/performer page with multiple videos becomes a 'channel' type. The meta handler returns a videos array with episode-like entries."
+    },
+    "movie": {
+      "description": "Single standalone video. One meta entry maps to one stream.",
+      "usage": "A standalone video page that is not part of a series or collection."
+    },
+    "series": {
+      "description": "Episodic content with seasons and episodes.",
+      "usage": "TV shows or content organized into seasons/episodes."
+    },
+    "tv": {
+      "description": "Live TV channels.",
+      "usage": "Live streaming television channels."
+    }
+  },
+  "errors_quick": [],
+  "app_limitations": {
+    "library_is_manual": "User must explicitly click 'Add to Library' — there is no programmatic way to add items to a user's library.",
+    "search_is_string_only": "Stremio search is plain-text string matching only. No filters, no faceted search, no advanced queries.",
+    "caching_is_app_side": "The Stremio app handles caching of catalog and stream responses. Addons cannot control cache TTL directly. Use behaviorHints to influence caching behavior."
+  },
+  "video_source_types": {
+    "mp4": {
+      "description": "Direct MP4 video file URL",
+      "implementation": "Return as ExtractorLinkType.VIDEO or as a stream object with url property.",
+      "stream_format": {
+        "url": "https://example.com/video.mp4",
+        "title": "Quality Label",
+        "behaviorHints": {
+          "notWebReady": false
+        }
+      }
+    },
+    "m3u8": {
+      "description": "HLS streaming playlist URL",
+      "implementation": "Return as a stream object with url property. MUST set behaviorHints.notWebReady to true since Stremio desktop does not natively handle HLS without this flag.",
+      "stream_format": {
+        "url": "https://example.com/stream.m3u8",
+        "title": "Quality Label",
+        "behaviorHints": {
+          "notWebReady": true
+        }
+      }
+    },
+    "iframe": {
+      "description": "Embedded video in an iframe or embed page",
+      "implementation": "Use loadExtractor for supported extractors, or return externalUrl for the embed page. Stremio will open it in a web view.",
+      "stream_format": {
+        "externalUrl": "https://example.com/embed/12345",
+        "title": "Embed Player",
+        "behaviorHints": {
+          "notWebReady": true
+        }
+      }
+    },
+    "torrent": {
+      "description": "BitTorrent info hash with optional trackers",
+      "implementation": "Return stream object with infoHash and optional sources array of tracker URLs.",
+      "stream_format": {
+        "infoHash": "0123456789abcdef0123456789abcdef01234567",
+        "sources": [
+          "tracker:udp://tracker.example.com:6969/announce"
+        ],
+        "title": "Quality Label"
+      }
+    }
+  }
+}
