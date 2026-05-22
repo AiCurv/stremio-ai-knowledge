@@ -89,6 +89,87 @@ A living database of errors encountered during Stremio addon development. Each e
 
 ---
 
+### ERROR #5: Meta `links` field enables clickable cross-navigation in Stremio
+
+- **Context:** Stremio video detail pages. User wants to click on model/tag links to navigate to their dedicated pages.
+- **Symptom:** Video detail pages show no clickable links for models or tags. User cannot navigate to model pages or tag pages from a video they're watching.
+- **Root Cause:** The `links` field in the meta response was not being populated. Stremio's `links` array is the official way to add clickable navigation links on detail pages.
+- **Fix:** Add the `links` array to your movie-type meta response with `stremio:///detail/` deep link URLs:
+  ```javascript
+  const meta = {
+      id: "video_12345",
+      type: "movie",
+      name: "Video Title",
+      links: [
+          { name: "Kwini Kim", category: "Models", url: "stremio:///detail/channel/model_kwini-kim" },
+          { name: "Asian", category: "Categories", url: "stremio:///detail/channel/cat_asian" },
+          { name: "petite", category: "Tags", url: "stremio:///detail/channel/tag_petite" },
+      ]
+  };
+  ```
+  Stremio deep link URL formats:
+  - `stremio:///detail/{type}/{id}` — Navigate to another meta item's detail page
+  - `stremio:///detail/{type}/{id}/{videoId}` — Navigate to a specific video within a series/channel
+  - `stremio:///search?search={query}` — Open the search page with a query
+  - `stremio:///discover/{encodedManifestUrl}/{type}/{catalogId}?{extra}` — Open a specific catalog filtered
+  Links are grouped visually by `category` in Stremio's UI.
+- **Prevention:** Always populate the `links` field for movie-type meta. Stremio routes `stremio:///detail/` deep links to the appropriate addon based on `idPrefixes` in the manifest.
+
+---
+
+### ERROR #6: Model page videos not sorted by date (random order)
+
+- **Context:** KVS model pages. When user opens a model's channel page in Stremio, videos appear in random order instead of newest first.
+- **Symptom:** User has to scroll through many old videos to find the newest content.
+- **Root Cause:** KVS model pages default to a non-chronological sort.
+- **Fix:** Append `?sort_by=post_date` to the model page URL:
+  ```javascript
+  const modelUrl = `${BASE_URL}/models/${slug}/?sort_by=post_date`;
+  const pUrl = `${BASE_URL}/models/${slug}/${page}/?sort_by=post_date`;
+  ```
+  Available KVS sort options: `post_date`, `video_viewed`, `rating`, `duration`, `most_commented`, `most_favourited`, `video_viewed_today`
+- **Prevention:** Always use explicit sort parameters when scraping model/channel pages.
+
+---
+
+### ERROR #7: Video dates all show the same (today's date)
+
+- **Context:** Stremio channel video list. The `released` field.
+- **Symptom:** All videos show the same date, making it impossible to tell which is newer.
+- **Root Cause:** KVS sites don't expose publication dates on video cards. Using `new Date().toISOString()` gives all videos the same date.
+- **Fix:** Use video IDs as date proxy. KVS uses auto-incrementing IDs, so higher = newer:
+  ```javascript
+  function videoIdToDate(videoId) {
+      const id = parseInt(videoId);
+      const baseDate = new Date("2020-01-01").getTime();
+      const msPerId = (6.4 * 365.25 * 24 * 60 * 60 * 1000) / 500000;
+      return new Date(baseDate + id * msPerId).toISOString();
+  }
+  ```
+  Adjust calibration constants based on your target site's ID range.
+- **Prevention:** Never use `new Date().toISOString()` for all videos.
+
+---
+
+### ERROR #8: Embed page canonical URL gives full video page for tag extraction
+
+- **Context:** KVS sites. Need tags/models/categories from a video page but only have the embed URL.
+- **Symptom:** Video meta handler can only get basic info from embed page. No model/tag links.
+- **Root Cause:** Embed page is minimal - no tag/category links. Full video page needs slug which we don't have.
+- **Fix:** The embed page contains `<link rel="canonical">` pointing to the full video page:
+  ```javascript
+  const embedHtml = await fetchPage(`${BASE_URL}/embed/${videoId}/`);
+  const e$ = cheerio.load(embedHtml);
+  const canonicalUrl = e$('link[rel="canonical"]').attr('href');
+  if (canonicalUrl) {
+      const fullHtml = await fetchPage(canonicalUrl);
+      // Extract models, categories, tags from full page
+  }
+  ```
+- **Prevention:** Always check for canonical URLs when scraping embed pages.
+
+---
+
 ## Quick Reference: Error → Fix Lookup
 
 | # | Error | Quick Fix |
@@ -97,6 +178,10 @@ A living database of errors encountered during Stremio addon development. Each e
 | 2 | Vercel timeout | Cache, optimize, or use externalUrl |
 | 3 | KVS slug required | Use embed URLs or store full URLs |
 | 4 | defaultVideoId back loop | Remove defaultVideoId from channel meta |
+| 5 | No clickable model/tag links | Add `links` array with stremio:///detail/ deep links |
+| 6 | Videos not sorted by date | Add ?sort_by=post_date to model page URLs |
+| 7 | All video dates same | Use videoId as date proxy with calibration |
+| 8 | Can't get tags from embed | Use canonical link from embed page |
 
 ---
 
@@ -104,7 +189,7 @@ A living database of errors encountered during Stremio addon development. Each e
 
 | Platform | Known Errors | Risk Level |
 |----------|-------------|------------|
-| KVS | 2 (Errors #1, #3) | Medium — embed URLs solve most issues |
+| KVS | 5 (Errors #1, #3, #6, #7, #8) | Medium — embed URLs + sort params solve most issues |
 | Vercel Hobby | 1 (Error #2) | High — 10s timeout is a real constraint |
 | WordPress | 0 | Low — standard HTML, easy to scrape |
 | Cloudflare-protected | 0 (documented in AGENT_GUIDE) | High — may block requests entirely |

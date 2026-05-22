@@ -885,3 +885,139 @@ builder.defineStreamHandler(async ({ type, id }) => {
 | `behaviorHints.notWebReady` | boolean | No | Set `true` for HLS and external URLs. |
 
 *Exactly one of `url`, `externalUrl`, or `infoHash` must be provided per stream.
+
+---
+
+## 9. Meta `links` Field — Clickable Cross-Navigation
+
+The `links` array in a meta response creates clickable navigation links on Stremio's detail page. This is the key mechanism for enabling users to navigate between related content (e.g., from a video to a model page, or from a video to a tag page).
+
+### Link Object Format
+
+```javascript
+{
+    name: "Display Name",     // REQUIRED - text shown to user
+    category: "Group Name",   // REQUIRED - links are grouped by category in UI
+    url: "stremio:///..."     // REQUIRED - deep link URL
+}
+```
+
+### Stremio Deep Link URL Formats
+
+| Deep Link | Purpose | Example |
+|-----------|---------|---------|
+| `stremio:///detail/{type}/{id}` | Navigate to another item's detail page | `stremio:///detail/channel/model_kwini-kim` |
+| `stremio:///detail/{type}/{id}/{videoId}` | Open a specific video in a series/channel | `stremio:///detail/series/tt0108778/tt0108778:1:1` |
+| `stremio:///search?search={query}` | Open the search page with a query | `stremio:///search?search=Kwini%20Kim` |
+| `stremio:///discover/{encodedManifestUrl}/{type}/{catalogId}?{extra}` | Open a specific catalog with filters | `stremio:///discover/https%3A%2F%2Fv3-cinemeta.strem.io%2Fmanifest.json/movie/top?genre=Drama` |
+
+### Complete Example: Video Meta with Models, Categories, and Tags
+
+```javascript
+// When building a video's meta, add links to related content:
+const links = [];
+
+// Models (yellow tags on KVS sites) → navigate to model channel page
+for (const model of pageData.models) {
+    links.push({
+        name: model.name,
+        category: "Models",
+        url: `stremio:///detail/channel/model_${model.slug}`,
+    });
+}
+
+// Categories (gray category tags) → navigate to category channel page
+for (const cat of pageData.categories) {
+    links.push({
+        name: cat.name,
+        category: "Categories",
+        url: `stremio:///detail/channel/cat_${cat.slug}`,
+    });
+}
+
+// Tags (gray keyword tags - limit to 5) → navigate to tag channel page
+for (const tag of pageData.tags.slice(0, 5)) {
+    links.push({
+        name: tag.name,
+        category: "Tags",
+        url: `stremio:///detail/channel/tag_${tag.slug}`,
+    });
+}
+
+const meta = {
+    id: "video_12345",
+    type: "movie",
+    name: "Video Title",
+    links: links,  // This creates clickable links in Stremio's detail page
+};
+```
+
+### Important Notes
+
+1. **Stremio routes deep links based on `idPrefixes`.** When a user clicks `stremio:///detail/channel/model_kwini-kim`, Stremio looks for addons that handle `channel` type with an idPrefix matching `model_`. Make sure your manifest declares all prefixes you use in links.
+2. **Categories group links visually.** Links with the same `category` are displayed together under that heading.
+3. **Reserved categories:** Do NOT use `imdb` or `share` as categories — these are reserved by Stremio.
+4. **Platform support varies.** Meta links may not work identically on all platforms (Android, Desktop, Web). Test on your target platform.
+5. **Users can add linked items to their library.** When a user navigates to a channel page via a deep link, they can add it to their Stremio library for easy access.
+
+---
+
+## 10. Multi-Prefix ID Strategy for Channel Types
+
+When building an addon with multiple navigable entities (models, tags, categories), use a separate ID prefix for each entity type. This allows Stremio to route requests correctly.
+
+### Manifest Configuration
+
+```javascript
+const manifest = {
+    id: "community.my-addon",
+    resources: [
+        "catalog",
+        { name: "meta", types: ["channel", "movie"], idPrefixes: ["model_", "video_", "tag_", "cat_"] },
+        { name: "stream", types: ["movie"], idPrefixes: ["video_"] },
+    ],
+    types: ["channel", "movie"],
+    catalogs: [
+        { type: "channel", id: "models", name: "Models", extra: [...] },
+        { type: "channel", id: "tags", name: "Tags", extra: [...] },
+        { type: "movie", id: "video_search", name: "Video Search", extra: [...] },
+    ],
+    idPrefixes: ["model_", "video_", "tag_", "cat_"],
+};
+```
+
+### Entity Type Mapping
+
+| Entity | Type | Prefix | ID Format | Description |
+|--------|------|--------|-----------|-------------|
+| Model | channel | `model_` | `model_kwini-kim` | Model page with all their videos |
+| Video | movie | `video_` | `video_416282` | Single video with stream |
+| Tag | channel | `tag_` | `tag_british` | Tag page with all tagged videos |
+| Category | channel | `cat_` | `cat_asian` | Category page with all category videos |
+
+### Meta Handler Routing
+
+```javascript
+builder.defineMetaHandler(async ({ id, type }) => {
+    if (type === "channel" && id.startsWith("model_")) {
+        // Handle model page → fetch /models/{slug}/?sort_by=post_date
+    }
+    if (type === "channel" && id.startsWith("tag_")) {
+        // Handle tag page → fetch /tags/{slug}/
+    }
+    if (type === "channel" && id.startsWith("cat_")) {
+        // Handle category page → fetch /categories/{slug}/
+    }
+    if (type === "movie" && id.startsWith("video_")) {
+        // Handle video → fetch /embed/{id}/ + full page for tags
+    }
+    return { meta: {} };
+});
+```
+
+### Key Design Decisions
+
+1. **Tags and categories as `channel` type** allows users to add them to their Stremio library, just like models.
+2. **Each entity type has its own prefix** prevents ID collisions and allows clean routing.
+3. **Streams only for `video_` prefix** — channel-type items don't have streams; users click individual videos from the video list.
+4. **Sort model pages by date** using `?sort_by=post_date` so newest videos appear first.
