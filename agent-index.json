@@ -1,7 +1,7 @@
 {
   "meta": {
     "name": "stremio-ai-knowledge",
-    "version": "1.0",
+    "version": "1.1",
     "description": "AI Agent Knowledge Base for Stremio Addon Development",
     "updated": "2026-05-22"
   },
@@ -37,11 +37,18 @@
       "usage": "Live streaming television channels."
     }
   },
-  "errors_quick": [],
+  "errors_quick": {
+    "kvs_404_no_slug": "Use /embed/{id}/ instead of /video/{id}/ — KVS requires slug in video URLs",
+    "vercel_timeout": "Cache responses, minimize HTTP requests, use 10s max on Hobby plan",
+    "kvs_slug_required": "Store full video URLs from model pages or use embed URLs",
+    "defaultVideoId_loop": "NEVER set defaultVideoId in channel meta — causes infinite back-loop in Stremio"
+  },
   "app_limitations": {
     "library_is_manual": "User must explicitly click 'Add to Library' — there is no programmatic way to add items to a user's library.",
     "search_is_string_only": "Stremio search is plain-text string matching only. No filters, no faceted search, no advanced queries.",
-    "caching_is_app_side": "The Stremio app handles caching of catalog and stream responses. Addons cannot control cache TTL directly. Use behaviorHints to influence caching behavior."
+    "caching_is_app_side": "The Stremio app handles caching of catalog and stream responses. Addons cannot control cache TTL directly. Use behaviorHints to influence caching behavior.",
+    "channel_videos_not_streams": "Channel type videos are shown as a clickable list, NOT as stream options. Click a video to see its streams.",
+    "search_returns_mixed_types": "Search queries all searchable catalogs across types. Both channel and movie results appear together."
   },
   "video_source_types": {
     "mp4": {

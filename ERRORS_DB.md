@@ -62,6 +62,33 @@ A living database of errors encountered during Stremio addon development. Each e
 
 ---
 
+### ERROR #4: defaultVideoId causes infinite back-loop in Stremio
+
+- **Context:** Stremio addon using `channel` type for model/creator pages. Setting `behaviorHints.defaultVideoId` in the meta response.
+- **Symptom:** When user clicks on a channel detail page, Stremio auto-navigates to play one video. Pressing Back returns to the channel page, which immediately auto-navigates again. User is stuck in an infinite loop and cannot browse the video list.
+- **Root Cause:** `behaviorHints.defaultVideoId` tells Stremio to auto-open a specific video's streams when the detail page loads. Combined with Stremio's `guessStream: true` flag in `useMetaDetails`, this creates: detail page → auto-play video → press back → detail page reloads → auto-play video → infinite loop.
+- **Fix:** DO NOT set `defaultVideoId` in channel meta responses. Remove it entirely:
+  ```javascript
+  // WRONG — causes infinite back loop:
+  const meta = {
+      id: "model_kwini-kim",
+      type: "channel",
+      videos: [...],
+      behaviorHints: { defaultVideoId: "video_12345" }  // REMOVE THIS
+  };
+
+  // CORRECT — no defaultVideoId, user clicks videos manually:
+  const meta = {
+      id: "model_kwini-kim",
+      type: "channel",
+      videos: [...],
+      // NO behaviorHints.defaultVideoId
+  };
+  ```
+- **Prevention:** Never use `defaultVideoId` for channel type content. It was designed for movie type (where there's one implicit video) but causes navigation loops in channel type. Let users click videos from the list manually.
+
+---
+
 ## Quick Reference: Error → Fix Lookup
 
 | # | Error | Quick Fix |
@@ -69,6 +96,7 @@ A living database of errors encountered during Stremio addon development. Each e
 | 1 | /video/{id}/ 404 | Use /embed/{id}/ |
 | 2 | Vercel timeout | Cache, optimize, or use externalUrl |
 | 3 | KVS slug required | Use embed URLs or store full URLs |
+| 4 | defaultVideoId back loop | Remove defaultVideoId from channel meta |
 
 ---
 
