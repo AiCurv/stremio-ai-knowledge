@@ -474,9 +474,10 @@ ID Prefixes:
   - tag_      → /search/{tag} (channel type — has videos array, addable to library)
   - date_     → /dates/{date} (channel type — has videos array, addable to library)
 
-ID Encoding: Star/channel/tag names are base64url-encoded for URL-safe Stremio IDs
-  - e.g., "Della Cate" → star_RGVsbGEgQ2F0ZQ
-  - Decode with: Buffer.from(encoded, 'base64url').toString('utf-8')
+ID Encoding: Star/channel/tag names are URI-encoded (encodeURIComponent) for URL-safe Stremio IDs
+  - e.g., "Della Cate" → star_Della%20Cate
+  - Decode with: decodeURIComponent(encoded)
+  - ⚠️ NEVER use base64/base64url for IDs — it breaks the meta handler (Error #16)
 
 Catalogs:
   - type: channel, id: "stars"
@@ -506,15 +507,17 @@ Meta:
   - channel (date_ prefix): /dates/{date} → name, videos array (up to 3 pages)
 
 Stream (movie type only, video_ prefix):
-  1. Video streams: /play/{id}/{quality}.mp4 (proxied from Vercel for IP-bound tokens)
+  1. Video streams: Direct MP4 URLs from <source> tags (IP-bound tokens — may need proxy)
      - Up to 3 qualities: 1080p FHD, 720p HD, 360p
-  2. Star cross-nav: externalUrl → stremio:///detail/channel/star_{encoded}
-     - ⭐ Clickable star navigation streams (MANDATORY in v5.0.0+)
-  3. Channel cross-nav: externalUrl → stremio:///detail/channel/ch_{encoded}
-     - 🏠 Clickable channel navigation streams (MANDATORY in v5.0.0+)
-  4. Tag cross-nav: externalUrl → stremio:///detail/channel/tag_{encoded}
-     - 🏷️ Clickable tag navigation streams (MANDATORY in v5.0.0+, limit 10 max)
-  5. Date cross-nav: externalUrl → stremio:///detail/channel/date_{date}
+     - NOTE: As of v6.0.0, direct MP4 URLs work from Vercel. If 403s occur, add stream proxy.
+  2. Star cross-nav: externalUrl → stremio:///detail/channel/star_{URI-encoded}
+     - ⭐ Clickable star navigation streams (MANDATORY in v6.0.0+)
+  3. Channel cross-nav: externalUrl → stremio:///detail/channel/ch_{URI-encoded}
+     - 🏠 Clickable channel navigation streams (MANDATORY in v6.0.0+)
+  4. Tag cross-nav: externalUrl → stremio:///detail/channel/tag_{URI-encoded}
+     - 🏷️ Clickable tag navigation streams (MANDATORY in v6.0.0+, limit 10 max)
+  5. Date cross-nav: externalUrl → stremio:///detail/channel/date_{URI-encoded}
+     - 📅 Clickable date navigation streams (NEW in v6.0.0)
 
 Cross-Navigation Pattern (W1MP-style):
   - Everything in the "red circle" (date, channel, star, tags) becomes a CHANNEL
@@ -529,7 +532,8 @@ Cross-Navigation Pattern (W1MP-style):
 - **Vercel URL:** https://xxdbx-addon.vercel.app
 - **Manifest URL:** https://xxdbx-addon.vercel.app/manifest.json
 - **GitHub Repo:** AiCurv/curvcorn-stremio (xxdbx-addon subfolder)
-- **Version:** 5.0.0 (W1MP pattern — channel+movie types, library support, clickable navigation streams)
+- **Version:** 6.0.0 (W1MP pattern — channel+movie types, URI-encoded IDs, library support, clickable navigation streams with dates)
+- **Previous Version (5.0.0):** BROKEN — used base64url IDs that broke the meta handler (see Error #16)
 
 ---
 
