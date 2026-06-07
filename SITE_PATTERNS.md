@@ -509,8 +509,11 @@ Stream (movie type only, video_ prefix):
   1. Video streams: /play/{id}/{quality}.mp4 (proxied from Vercel for IP-bound tokens)
      - Up to 3 qualities: 1080p FHD, 720p HD, 360p
   2. Star cross-nav: externalUrl → stremio:///detail/channel/star_{encoded}
+     - ⭐ Clickable star navigation streams (MANDATORY in v5.0.0+)
   3. Channel cross-nav: externalUrl → stremio:///detail/channel/ch_{encoded}
+     - 🏠 Clickable channel navigation streams (MANDATORY in v5.0.0+)
   4. Tag cross-nav: externalUrl → stremio:///detail/channel/tag_{encoded}
+     - 🏷️ Clickable tag navigation streams (MANDATORY in v5.0.0+, limit 10 max)
   5. Date cross-nav: externalUrl → stremio:///detail/channel/date_{date}
 
 Cross-Navigation Pattern (W1MP-style):
@@ -526,7 +529,7 @@ Cross-Navigation Pattern (W1MP-style):
 - **Vercel URL:** https://xxdbx-addon.vercel.app
 - **Manifest URL:** https://xxdbx-addon.vercel.app/manifest.json
 - **GitHub Repo:** AiCurv/curvcorn-stremio (xxdbx-addon subfolder)
-- **Version:** 3.0.0 (W1MP pattern — channel+movie types, library support)
+- **Version:** 5.0.0 (W1MP pattern — channel+movie types, library support, clickable navigation streams)
 
 ---
 

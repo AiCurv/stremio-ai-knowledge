@@ -17,6 +17,48 @@ Building a Stremio addon is a systematic process:
 
 ---
 
+## ⚠️ MANDATORY COMPLIANCE CHECKLIST — READ BEFORE BUILDING
+
+Before you write ANY code for a Stremio addon, you MUST read and agree to follow these rules. If you skip any of these, your addon will be BROKEN or INCOMPLETE. These are NOT suggestions — they are REQUIREMENTS.
+
+### Pre-Build Requirements
+
+- [ ] **Read KNOWLEDGE_BASE.md Sections 10, 11, and 12** before writing any handler code
+- [ ] **Understand the difference between `meta.links` and `stream.externalUrl`** — they serve DIFFERENT purposes and appear in DIFFERENT parts of Stremio's UI
+- [ ] **Identify all navigable entities** on the target site (stars, models, channels, tags, categories, dates) — each one MUST be a `channel` type with its own ID prefix
+
+### Build Requirements
+
+- [ ] **Use `channel` + `movie` types** — NEVER use custom types like "curvcorn" (breaks library + cross-navigation)
+- [ ] **Add `externalUrl` navigation streams** in the stream handler for EVERY navigable entity (stars, channels, tags) — this is NOT optional, it's the #1 feature users want
+- [ ] **Add `meta.links`** in the meta handler for cross-navigation on the detail page
+- [ ] **Scope DOM selectors** to the video's own metadata section only — NEVER use broad selectors like `$("a")` or `$("a[href*='/models/']")` on video pages (picks up related/suggested content)
+- [ ] **Limit navigation streams** to 10 tags max, 10 stars max, 5 channels max — prevents clutter from related section pollution
+- [ ] **Test the stream endpoint** — verify `/stream/movie/video_{id}.json` returns BOTH playable streams AND navigation streams
+
+### Post-Build Verification
+
+- [ ] **`/manifest.json`** returns valid manifest with `channel` + `movie` types
+- [ ] **`/catalog/channel/{id}.json`** returns channel metas (stars, channels, tags)
+- [ ] **`/meta/channel/star_{id}.json`** returns a `videos` array (not empty)
+- [ ] **`/meta/movie/video_{id}.json`** returns video meta with `links` array
+- [ ] **`/stream/movie/video_{id}.json`** returns playable streams AND navigation `externalUrl` streams
+- [ ] **Navigation streams use `stremio:///detail/channel/` deep links** — NOT `stremio:///detail/movie/`
+- [ ] **Clicking a navigation stream opens a channel page** with a video list
+
+### ❌ COMMON MISTAKE: Only implementing meta.links
+
+**This is the #1 mistake AI agents make.** They add `links` to the meta handler but forget to add `externalUrl` streams. The result: users can see links on the detail page but NOT in the streams list, which is where they spend 95% of their time.
+
+```
+WRONG: Only meta.links → users can't navigate from streams list
+RIGHT: BOTH meta.links AND stream.externalUrl → users can navigate from everywhere
+```
+
+If you only implement one, implement the STREAM NAVIGATION. It's 10x more useful than meta links.
+
+---
+
 ## Step 1: Check Target Site for Cloudflare
 
 **Why:** Cloudflare-protected sites will block your HTTP requests. You need to know this before investing time in scraping.

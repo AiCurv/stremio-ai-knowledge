@@ -42,7 +42,8 @@
     "vercel_timeout": "Cache responses, minimize HTTP requests, use 10s max on Hobby plan",
     "kvs_slug_required": "Store full video URLs from model pages or use embed URLs",
     "defaultVideoId_loop": "NEVER set defaultVideoId in channel meta \u2014 causes infinite back-loop in Stremio",
-    "kvs_get_stream_ua_redirect": "KVS /get_stream/ URLs work as direct stream.url \u2014 Stremio's UA triggers 302 CDN redirect. NEVER use externalUrl for video streams."
+    "kvs_get_stream_ua_redirect": "KVS /get_stream/ URLs work as direct stream.url \u2014 Stremio's UA triggers 302 CDN redirect. NEVER use externalUrl for video streams.",
+    "missing_nav_streams": "Add externalUrl streams with stremio:///detail/channel/ deep links \u2014 meta.links alone is NOT enough. Users navigate from the streams list 95% of the time."
   },
   "app_limitations": {
     "library_is_manual": "User must explicitly click 'Add to Library' \u2014 there is no programmatic way to add items to a user's library.",

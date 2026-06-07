@@ -275,6 +275,7 @@ A living database of errors encountered during Stremio addon development. Each e
 | 12 | Custom type breaks library/cross-nav | Use standard channel+movie types (W1MP pattern) |
 | 13 | Related section pollution — 20+ random models in streams | Use scoped selectors (.js-models-list, .top-player-items-wrap) NOT broad $("a[href*='/models/']") |
 | 14 | "No Streams found" from channel page videos | Add model_/tag_ to stream idPrefixes + extractVideoId() for compound IDs |
+| 15 | No clickable navigation in streams list | Add `externalUrl` streams with `stremio:///detail/channel/` deep links — meta.links alone is NOT enough |
 
 ---
 
@@ -401,3 +402,71 @@ Create a serverless proxy endpoint that:
 - **Prevention:** ALWAYS use standard Stremio types (`channel`, `movie`, `series`). Custom types should ONLY be used if you specifically want items isolated in a separate Discover section AND you don't need library/cross-navigation features. For adult content addons where library and cross-navigation are essential, `channel` + `movie` is the correct pattern (proven by W1MP addon).
 
 - **Trade-off note:** Using `channel` + `movie` means the addon's catalogs appear in the standard "Channels" and "Movies" sections of Stremio's Discover, mixed with other addons' content. Custom types get their own section but lose all channel functionality.
+
+---
+
+### ERROR #15: Missing clickable navigation streams — only meta links, no stream externalUrl (v5.0.0)
+
+- **Context:** Building a Stremio addon with channel-type entities (stars, models, tags, channels). The addon has `meta.links` working but streams only contain playable video URLs, no navigation streams.
+- **Symptom:** Users open a video and see only quality options (1080p, 720p, 360p). There are no clickable star/model/channel/tag entries in the streams list. Users must manually search for stars to find their pages. The meta detail page shows links, but the STREAMS page — where users spend most of their time — has no navigation.
+- **Root Cause:** The developer (or AI agent) implemented `meta.links` (Section 10 of KNOWLEDGE_BASE.md) but did NOT implement clickable navigation streams (Section 12). They treated links and streams as the same feature, but they appear in DIFFERENT places in Stremio's UI:
+  - `meta.links` → appears on the video DETAIL page (info tab)
+  - `stream.externalUrl` → appears in the STREAMS list (where users click to play)
+  
+  The streams list is the PRIMARY interaction point. If navigation entries are only in meta.links, most users will never discover them because they go straight to the streams list.
+
+- **Fix:** Add `externalUrl` streams with `stremio:///detail/channel/` deep links to your stream handler. This is MANDATORY — not optional. Every video stream response MUST include:
+  1. Playable video streams (url field)
+  2. Star/model navigation streams (externalUrl field)
+  3. Channel/studio navigation streams (externalUrl field)  
+  4. Tag navigation streams (externalUrl field)
+
+  ```javascript
+  // In your stream handler:
+  
+  // 1. Add playable streams FIRST
+  streams.push({
+      name: "XXDBX",
+      title: "1080p FHD",
+      url: `${addonBase}/play/${videoId}/1080.mp4`,
+      behaviorHints: { notWebReady: false },
+  });
+  
+  // 2. Add star navigation streams (MANDATORY - not optional!)
+  for (const star of detail.stars.slice(0, 10)) {
+      streams.push({
+          name: "\u2b50 Star",
+          title: star.name,
+          externalUrl: `stremio:///detail/channel/star_${enc(star.name)}`,
+          behaviorHints: { group: "stars" },
+      });
+  }
+  
+  // 3. Add channel navigation streams
+  for (const ch of detail.channels.slice(0, 5)) {
+      streams.push({
+          name: "\ud83c\udfe0 Channel",
+          title: ch.name,
+          externalUrl: `stremio:///detail/channel/ch_${enc(ch.name)}`,
+          behaviorHints: { group: "channels" },
+      });
+  }
+  
+  // 4. Add tag navigation streams (limit to 10 to avoid clutter)
+  for (const tag of detail.tags.slice(0, 10)) {
+      streams.push({
+          name: "\ud83c\udff7\ufe0f Tag",
+          title: tag.name,
+          externalUrl: `stremio:///detail/channel/tag_${enc(tag.name)}`,
+          behaviorHints: { group: "tags" },
+      });
+  }
+  ```
+
+- **Prevention:** When building ANY Stremio addon with channel-type entities, ALWAYS implement BOTH:
+  1. `meta.links` — for the detail page info tab
+  2. `stream.externalUrl` — for the streams list (THE IMPORTANT ONE)
+  
+  If you only implement one, implement the STREAM navigation. It's the feature users interact with 95% of the time. The meta links are a nice bonus but NOT sufficient on their own.
+
+  **AI Agent Compliance Check:** Before finishing any addon, verify that `/stream/movie/video_{id}.json` returns BOTH playable streams AND navigation streams. If it only returns playable streams, the addon is INCOMPLETE.
