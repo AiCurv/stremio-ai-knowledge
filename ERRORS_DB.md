@@ -44,7 +44,6 @@ A living database of errors encountered during Stremio addon development. Each e
   3. Set `maxDuration: 10` in `vercel.json` (already the max for Hobby).
   4. Consider upgrading to Vercel Pro for 60-second timeout.
   5. For catalog handlers, return results immediately even if some items are incomplete — Stremio will request more.
-  6. For stream handlers, use the embed URL directly (externalUrl) instead of scraping if extraction is too slow.
 - **Prevention:** Test with Vercel's timeout in mind from the start. Use `vercel dev` locally to simulate serverless conditions. Time your handlers and optimize the slow ones before deploying.
 
 ---
@@ -170,73 +169,72 @@ A living database of errors encountered during Stremio addon development. Each e
 
 ---
 
-## Quick Reference: Error → Fix Lookup
+### ERROR #9: KVS /get_stream/ URLs — User-Agent redirect discovery enables native MP4 playback (v2.0.0 Fix)
 
-| # | Error | Quick Fix |
-|---|-------|-----------|
-| 1 | /video/{id}/ 404 | Use /embed/{id}/ |
-| 2 | Vercel timeout | Cache, optimize, or use externalUrl |
-| 3 | KVS slug required | Use embed URLs or store full URLs |
-| 4 | defaultVideoId back loop | Remove defaultVideoId from channel meta |
-| 5 | No clickable model/tag links | Add `links` array with stremio:///detail/ deep links |
-| 6 | Videos not sorted by date | Add ?sort_by=post_date to model page URLs |
-| 7 | All video dates same | Use videoId as date proxy with calibration |
-| 8 | Can't get tags from embed | Use canonical link from embed page |
-| 9 | KVS /get_stream/ "error 1" | Use proxy player page with site's own kt_player.js |
-| 10 | Cloudflare blocks scraping | Switch target or use Cloudflare-solving proxy |
+- **Context:** KVS (Kernel Video Sharing) sites like thepornbang.com. The `/get_stream/{videoId}-{quality}.mp4?md5=...&timestamp=...` URLs.
+- **Symptom (v1.x):** Stremio showed "none of the available extractors" error. The `/get_stream/` URLs triggered file downloads in browsers instead of streaming. The old v1.x implementation used `externalUrl` (proxy player page), which opened a browser/webview — users HATED this experience.
+- **Root Cause — The Misunderstanding:** We initially assumed `/get_stream/` was an encrypted anti-leeching system because:
+  1. Browsers received `200 HTML` (a player page) instead of video
+  2. `curl` with default UA received `200 HTML`
+  3. The URLs triggered file downloads in browsers
+  
+  **The real behavior** is that `/get_stream/` is a **User-Agent-based redirect gateway**:
+  - **Browser UA** → server returns `200 HTML` (player page)
+  - **Non-browser/media-player UA** → server returns `302 redirect` → CDN (vkuser.net)
+  
+  The CDN serves proper MP4 files with `Content-Type: video/mp4`, `Accept-Ranges: bytes`, `206 Partial Content` support, and `Content-Length` headers.
 
----
+- **Key Discovery — Stremio's Player UA:** Stremio's internal media player uses its own User-Agent (not a browser UA) when requesting stream URLs. This means:
+  1. Addon returns `stream.url` with the `/get_stream/` URL (with auth params)
+  2. Stremio's player requests the URL with its non-browser UA
+  3. ThePornBang returns `302 → CDN redirect`
+  4. CDN serves the MP4 with proper streaming headers
+  5. **Video plays natively in Stremio — NO browser, NO webview!**
 
-## Platform-Specific Error Rates
+- **User-Agent Redirect Behavior Table:**
 
-| Platform | Known Errors | Risk Level |
-|----------|-------------|------------|
-| KVS | 5 (Errors #1, #3, #6, #7, #8) | Medium — embed URLs + sort params solve most issues |
-| Vercel Hobby | 1 (Error #2) | High — 10s timeout is a real constraint |
-| WordPress | 0 | Low — standard HTML, easy to scrape |
-| Cloudflare-protected | 0 (documented in AGENT_GUIDE) | High — may block requests entirely |
+  | User-Agent | Response |
+  |---|---|
+  | Browser (Chrome, Firefox, etc.) | 200 HTML (player page) |
+  | "Stremio" UA | 302 → CDN redirect ✓ |
+  | Android stagefright UA | 302 → CDN redirect ✓ |
+  | VLC UA | 200 HTML |
+  | ffmpeg UA | 200 HTML |
+  | curl default UA | 200 HTML |
+  | No UA / empty UA | 200 or 302 (inconsistent) |
 
----
-
-### ERROR #9: KVS /get_stream/ URLs return "error 1" — encrypted anti-leeching protection
-
-- **Context:** KVS (Kernel Video Sharing) sites like thepornbang.com that use `generate_mp4()` encryption. When trying to use the `/get_stream/{videoId}-{quality}.mp4?md5=...&timestamp=...` URLs directly as stream URLs in Stremio.
-- **Symptom:** Stremio shows "none of the available extractors" error when tapping play. The `/get_stream/` URL returns `"error 1"` (7 bytes) when fetched programmatically, and the Content-Type is `text/html; charset=UTF-8` instead of `video/mp4`.
-- **Root Cause:** KVS uses a sophisticated anti-leeching system with encrypted video URLs. The `/get_stream/` URLs are NOT direct MP4 links — they are tokens that must be "unlocked" through a 2-step CryptoJS decryption process:
-  1. The video page contains `generate_mp4(encryptedData, key, commaIds, videoId)` call
-  2. `generate_mp4` decrypts the first parameter using CryptoJS AES-256-CBC with PBKDF2-SHA512
-  3. It makes an XHR GET request to the decrypted URL path
-  4. It decrypts the response
-  5. It makes an XHR POST to `/get_video/` with the re-encrypted data
-  6. Only then does the server allow the `/get_stream/` URL to serve actual video data
-  The kt_player.js is heavily obfuscated with string array rotation, making it impractical to replicate the decryption in Node.js.
-- **Fix:** Create a **proxy player page** that embeds the site's own `kt_player.js` with the `generate_mp4()` call. This lets the site's own JavaScript handle the decryption:
+- **Fix (v2.0.0):** Extract `get_stream` URLs from the page's `flashvars` JavaScript and return them as direct `url` streams:
   ```javascript
-  // Stream handler returns externalUrl to our proxy page
+  // flashvars format on the page:
+  // video_url: 'https://www.thepornbang.com/get_stream/{id}-480.mp4?md5=...&timestamp=...'
+  // video_alt_url: '...720p...'
+  // video_alt_url2: '...1080p...'  
+  // video_alt_url3: '...2160p...'
+
   streams.push({
       name: 'Curvcorn',
-      title: 'Play (Proxy Player)',
-      externalUrl: `${ADDON_BASE}/play/${videoSegment}`,
-      notWebReady: true,
+      title: '1080p FHD',
+      url: streamUrl,  // Direct get_stream URL with auth params
   });
   ```
-  The proxy page (served by a Vercel serverless function at `/play/{segment}`) fetches the video page HTML, extracts the player scripts (`kt_player.js` + `generate_mp4()` + `flashvars`), and serves a minimal HTML page with just the player. The site's own JS handles all decryption and playback.
   
-  **Implementation details:**
-  - Serverless function at `/api/index.js` intercepts `/play/` requests
-  - Fetches the video page from the target site
-  - Extracts `<script>` tags containing `kt_player.js`, `generate_mp4()`, and `flashvars`
-  - Serves a minimal HTML page with the player div and scripts
-  - The player auto-initializes and decrypts the video URL
-  - Stremio opens this page in its built-in web view
-- **Prevention:** Always check if KVS `/get_stream/` URLs actually serve video data (correct Content-Type: `video/mp4`, not `text/html`). If they return `"error 1"` or have wrong Content-Type, the site uses encrypted anti-leeching. Do NOT try to replicate the obfuscated decryption — use the proxy player approach instead.
+  **Fallback:** If direct URLs don't work, use the `/stream-proxy/` endpoint which uses a "Stremio" UA to resolve the redirect server-side and returns a 302 to the CDN URL.
+
+- **What NOT To Do:**
+  1. ❌ NEVER use `externalUrl` for video streams — it opens a browser/webview
+  2. ❌ NEVER assume MP4 URLs that trigger downloads in browsers are unplayable — check User-Agent behavior
+  3. ❌ NEVER strip auth parameters (md5, timestamp) from `/get_stream/` URLs — they're required
+  4. ❌ The `Content-Disposition: attachment` header on the CDN does NOT prevent Stremio from playing the stream
+
 - **Detection test:**
   ```bash
-  # Quick test: fetch a stream URL and check Content-Type
-  curl -sI "https://target.com/get_stream/123-480.mp4?md5=...&timestamp=..."
-  # If Content-Type is text/html → encrypted anti-leeching
-  # If Content-Type is video/mp4 → direct MP4, can use stream.url
+  # Test with different User-Agents:
+  # Browser UA → 200 HTML
+  curl -sI -H "User-Agent: Mozilla/5.0" "https://target.com/get_stream/123-480.mp4?md5=...&timestamp=..."
+  # Stremio UA → 302 redirect
+  curl -sI -H "User-Agent: Stremio" "https://target.com/get_stream/123-480.mp4?md5=...&timestamp=..."
   ```
+- **Prevention:** Always test stream URLs with Stremio's actual User-Agent, not just browser or curl. The server may behave differently based on UA. Never assume a URL is unplayable just because it triggers a download in a browser.
 
 ---
 
@@ -256,6 +254,34 @@ A living database of errors encountered during Stremio addon development. Each e
   # If you see "server: cloudflare" + 403 → site is Cloudflare-protected
   # If you see 200 + proper HTML → site is accessible
   ```
+
+---
+
+## Quick Reference: Error → Fix Lookup
+
+| # | Error | Quick Fix |
+|---|-------|-----------|
+| 1 | /video/{id}/ 404 | Use /embed/{id}/ |
+| 2 | Vercel timeout | Cache, optimize, minimize HTTP requests |
+| 3 | KVS slug required | Use embed URLs or store full URLs |
+| 4 | defaultVideoId back loop | Remove defaultVideoId from channel meta |
+| 5 | No clickable model/tag links | Add `links` array with stremio:///detail/ deep links |
+| 6 | Videos not sorted by date | Add ?sort_by=post_date to model page URLs |
+| 7 | All video dates same | Use videoId as date proxy with calibration |
+| 8 | Can't get tags from embed | Use canonical link from embed page |
+| 9 | KVS /get_stream/ "error 1" or "none of the available extractors" | Use direct `url` streams with get_stream URLs — Stremio's UA triggers 302 CDN redirect. NEVER use externalUrl. |
+| 10 | Cloudflare blocks scraping | Switch target or use Cloudflare-solving proxy |
+
+---
+
+## Platform-Specific Error Rates
+
+| Platform | Known Errors | Risk Level |
+|----------|-------------|------------|
+| KVS | 6 (Errors #1, #3, #6, #7, #8, #9) | Medium — embed URLs + direct streams + sort params solve most issues |
+| Vercel Hobby | 1 (Error #2) | High — 10s timeout is a real constraint |
+| WordPress | 0 | Low — standard HTML, easy to scrape |
+| Cloudflare-protected | 1 (Error #10) | High — may block requests entirely |
 
 ---
 
