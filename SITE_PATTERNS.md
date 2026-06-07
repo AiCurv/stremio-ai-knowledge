@@ -67,7 +67,6 @@ Documented site structure and scraping patterns for building Stremio addons. Eac
 4. Extract `src` attribute — this is the direct MP4 URL
 
 ```javascript
-// Extraction code for w1mp.com
 async function extractStream(videoId) {
     const embedUrl = `https://w1mp.com/embed/${videoId}/`;
     const html = await fetchPage(embedUrl);
@@ -91,7 +90,6 @@ async function extractStream(videoId) {
     }
 
     if (videoUrl) {
-        // Ensure absolute URL
         if (!videoUrl.startsWith('http')) {
             videoUrl = `https://w1mp.com${videoUrl}`;
         }
@@ -102,12 +100,9 @@ async function extractStream(videoId) {
         };
     }
 
-    // Last resort: return embed as externalUrl
-    return {
-        externalUrl: embedUrl,
-        title: 'Embed Player',
-        behaviorHints: { notWebReady: true },
-    };
+    // No stream found — NEVER use externalUrl (opens browser/webview)
+    console.error(`No direct stream found for ${videoId}`);
+    return null;
 }
 ```
 
@@ -142,7 +137,8 @@ Meta:
   - movie: /embed/{id}/ → metadata from embed page
 
 Stream:
-  - /embed/{id}/ → <video><source> → MP4 URL
+  - /embed/{id}/ → <video><source> → MP4 URL (stream.url)
+  - NEVER use externalUrl for video streams
 ```
 
 ---
@@ -166,7 +162,7 @@ When approaching a new site, use these signals to identify the platform:
 
 ## Site: thepornbang.com
 
-- **Platform:** KVS (Kernel Video Sharing) — Enhanced with encrypted anti-leeching
+- **Platform:** KVS (Kernel Video Sharing) — User-Agent-based redirect gateway
 - **Cloudflare:** Behind Cloudflare CDN (but accessible with proper headers)
 - **Last Verified:** 2026-06-07
 
@@ -215,7 +211,7 @@ When approaching a new site, use these signals to identify the platform:
 | Pattern | URL | Notes |
 |---------|-----|-------|
 | Video page | `/video/{slug}_v{id}/` | Full page with player, metadata, related videos |
-| Stream token | `/get_stream/{contentId}-{quality}.mp4?md5=...&timestamp=...` | **ENCRYPTED — see below** |
+| Stream URL | `/get_stream/{contentId}-{quality}.mp4?md5=...&timestamp=...` | **Direct MP4 via User-Agent redirect — see below** |
 
 ### URL Convention
 
@@ -223,39 +219,92 @@ All entity URLs use the format: `/{entity_type}/{slug}_{typeChar}{id}/`
 - Type chars: `c`=category, `p`=pornstar, `s`=studio, `t`=tag, `v`=video
 - Example: `/category/big-tits_c18/` → slug="big-tits", type=c, id=18
 
-### Video Source Extraction — CRITICAL
+### Video Source Extraction — Direct MP4 via User-Agent Redirect (v2.0.0)
 
-**⚠️ ThePornBang uses KVS encrypted anti-leeching (generate_mp4). Direct MP4 URLs DO NOT work.**
+**✅ ThePornBang's `/get_stream/` URLs work as direct `stream.url` streams in Stremio!**
 
-The `/get_stream/` URLs return `"error 1"` when fetched programmatically because KVS requires a 2-step CryptoJS decryption process via `generate_mp4()`:
+The `/get_stream/` endpoint is a **User-Agent-based redirect gateway**:
 
-1. Video page contains: `generate_mp4(encryptedData, key, commaIds, videoId)`
-2. The function decrypts `encryptedData` using AES-256-CBC with PBKDF2-SHA512
-3. Makes XHR GET to decrypted URL
-4. Decrypts response
-5. Makes XHR POST to `/get_video/` with re-encrypted data
-6. Only then are the `/get_stream/` URLs unlocked
+| User-Agent | Response |
+|---|---|
+| Browser (Chrome, Firefox, etc.) | 200 HTML (player page) — triggers download in browser |
+| "Stremio" UA | **302 → CDN redirect ✓** |
+| Android stagefright UA | **302 → CDN redirect ✓** |
+| VLC UA | 200 HTML |
+| ffmpeg UA | 200 HTML |
+| curl default UA | 200 HTML |
 
-**The kt_player.js is heavily obfuscated** — string array rotation, hex encoding, variable name mangling. Replicating in Node.js is impractical.
+**The CDN (vkuser.net) serves proper MP4 files** with:
+- `Content-Type: video/mp4`
+- `Accept-Ranges: bytes`
+- `206 Partial Content` support
+- `Content-Length` headers
+- `Content-Disposition: attachment` (full requests) / `inline` (range requests)
 
-**✅ Proven Fix: Proxy Player Page**
+**How it works in Stremio:**
+1. Addon extracts `get_stream` URLs from the page's `flashvars` JavaScript
+2. Returns them as direct `url` streams (NOT `externalUrl`!)
+3. Stremio's player requests the URL with its own non-browser User-Agent
+4. ThePornBang returns `302 → CDN redirect`
+5. CDN serves the MP4 with proper streaming headers
+6. **Video plays natively in Stremio — NO browser, NO webview!**
 
-Create a serverless function that:
-1. Fetches the video page HTML
-2. Extracts `kt_player.js` script + `generate_mp4()` call + `flashvars` object
-3. Serves a minimal HTML page with the player
-4. The site's own JS handles decryption and playback
-5. Stremio opens this via `externalUrl` in its built-in web view
+**Extraction code:**
 
 ```javascript
-// Stream handler
-streams.push({
-    name: 'Curvcorn',
-    title: 'Play (Proxy Player)',
-    externalUrl: `${ADDON_BASE}/play/${videoSegment}`,
-    notWebReady: true,
-});
+// flashvars format on the page:
+// video_url: 'https://www.thepornbang.com/get_stream/{id}-480.mp4?md5=...&timestamp=...'
+// video_alt_url: '...720p...'
+// video_alt_url2: '...1080p...'  
+// video_alt_url3: '...2160p...'
+
+const qualityMap = {
+    'video_alt_url3': { quality: '2160p UHD', suffix: '2160' },
+    'video_alt_url2': { quality: '1080p FHD', suffix: '1080' },
+    'video_alt_url':  { quality: '720p HD', suffix: '720' },
+    'video_url':      { quality: '480p SD', suffix: '480' },
+};
+
+for (const [varName, config] of Object.entries(qualityMap)) {
+    const match = flashvars.match(new RegExp(varName + "\\s*[:=]\\s*['\"]([^'\"]+)['\"]"));
+    if (match && match[1]) {
+        streams.push({
+            name: 'Curvcorn',
+            title: config.quality,
+            url: match[1],  // Direct get_stream URL with auth params
+        });
+    }
+}
 ```
+
+**Stream URL format:**
+```
+https://www.thepornbang.com/get_stream/{videoId}-{quality}.mp4?md5={hash}&timestamp={ts}_{nonce}
+```
+- Quality options: 480, 720, 1080, 2160
+- `md5` and `timestamp` are time-limited auth parameters — DO NOT strip them
+- URL expires after some time (user must re-request streams)
+
+**CDN redirect chain:**
+```
+Stremio Player → get_stream URL (thepornbang.com)
+                → 302 Redirect to vkuser.net CDN
+                → CDN serves MP4 (200/206 with range support)
+```
+
+**Fallback: Proxy endpoint** (if direct URLs don't work for some reason):
+- URL: `https://curvcorn-thepornbang.vercel.app/stream-proxy/{segment}/{quality}`
+- Our server fetches the video page, extracts stream URLs, resolves the redirect
+- Returns 302 redirect to CDN URL or get_stream URL as fallback
+- Uses "Stremio" UA to reliably get 302 redirects from thepornbang.com
+
+### ⚠️ Critical: What NOT To Do
+
+1. ❌ **NEVER use `externalUrl` for video streams** — it opens a browser/webview, users HATE it
+2. ❌ **NEVER assume `/get_stream/` URLs are unplayable because they trigger downloads in browsers** — the server behavior depends on User-Agent
+3. ❌ **NEVER strip auth parameters** (md5, timestamp) from get_stream URLs — they're required for the redirect
+4. ❌ **The `Content-Disposition: attachment` header does NOT prevent Stremio from playing the stream** — Stremio's player handles this correctly
+5. ❌ **NEVER use a proxy player page approach** — the direct `stream.url` approach is simpler, faster, and gives native playback
 
 ### Scraping Notes
 
@@ -302,8 +351,10 @@ Meta:
   - Tag (t_ prefix): /tag/{segment}/ → name, videos array
 
 Stream:
-  - Proxy player page (/play/{segment}) with externalUrl
-  - Fallback: direct link to video page on ThePornBang
+  - Direct MP4 via get_stream URLs (stream.url) — Stremio's UA triggers 302 CDN redirect
+  - Fallback: /stream-proxy/ endpoint with "Stremio" UA
+  - Cross-navigation: externalUrl with stremio:///detail/curvcorn/{id} for models/tags (in-app navigation only)
+  - ❌ NEVER use externalUrl for video playback
 ```
 
 ---
