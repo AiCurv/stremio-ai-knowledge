@@ -11,6 +11,7 @@ This repository contains everything needed to build a Stremio addon from scratch
 - **Templates** — Complete, copy-paste-ready code for every component
 - **Error Database** — Known errors with proven fixes, so you don't repeat mistakes
 - **Site Patterns** — Documented site structures for quick scraping
+- **Stream Fix Discovery** — How User-Agent redirects enable native MP4 playback in Stremio
 - **Workflow Guide** — Step-by-step process for building any addon
 - **AI Prompt** — Ready-made prompt template for AI agent interactions
 
@@ -52,7 +53,7 @@ Machine-readable quick reference containing:
 - Critical version requirements (Node.js, SDK, dependencies)
 - Stremio protocol routes
 - Content type definitions (channel, movie, series, tv)
-- Video source type reference (MP4, M3U8, iframe, torrent)
+- Video source type reference (MP4, M3U8, torrent)
 - App limitations and workarounds
 
 **Use this when:** You need a quick lookup for API formats, version numbers, or stream object structures.
@@ -65,7 +66,8 @@ Complete, production-ready templates for:
 - `api/index.js` Vercel serverless entry point with CORS
 - `vercel.json` with rewrites and function configuration
 - `package.json` with correct dependency versions
-- Handler patterns: Catalog (searchable + browse), Meta (channel + movie), Stream (MP4/M3U8/embed)
+- Handler patterns: Catalog (searchable + browse), Meta (channel + movie), Stream (MP4/M3U8)
+- **Stream Fix (v2.0.0):** How User-Agent redirects enable native MP4 playback
 
 **Use this when:** You're building an addon and need a template to start from.
 
@@ -75,6 +77,7 @@ Living database of errors encountered during addon development:
 - KVS video page 404 without slug → use embed URL
 - Vercel serverless timeout → cache and optimize
 - KVS slug requirement → use embed URLs or store full URLs
+- **KVS /get_stream/ User-Agent redirect** → use direct `stream.url`, NEVER `externalUrl`
 
 **Use this when:** You encounter an error and want to check if it's a known issue.
 
@@ -85,6 +88,7 @@ Documented site structures and scraping patterns:
 - Video source extraction methods with code samples
 - Platform-specific gotchas and token handling
 - Platform detection guide
+- **ThePornBang:** User-Agent redirect gateway for direct MP4 playback
 
 **Use this when:** You're building an addon for a site that's already documented, or need to identify a new site's platform.
 
@@ -105,7 +109,7 @@ Documented site structures and scraping patterns:
 
 Universal prompt template for AI agents:
 - Fill-in-the-blank format for any site
-- Example filled-in prompt for w1mp.com
+- Example filled-in prompts for w1mp.com and thepornbang.com
 - Prompt engineering tips for best results
 
 **Use this when:** You want to ask an AI agent to build an addon for you.
@@ -143,8 +147,11 @@ Stremio addons implement a simple HTTP-based protocol with four core endpoints:
 
 - **MP4** — Direct video URL. Return as `stream.url` with `notWebReady: false`.
 - **M3U8** — HLS playlist URL. Return as `stream.url` with `notWebReady: true`.
-- **iframe/embed** — Embedded video page. Return as `stream.externalUrl` with `notWebReady: true`.
 - **torrent** — BitTorrent info hash. Return as `stream.infoHash` with optional `sources` array.
+
+> ⚠️ **NEVER use `externalUrl` for video streams.** It opens a browser/webview which users hate. Always extract the direct video URL (MP4 or M3U8). If a URL triggers a download in your browser, test it with Stremio's User-Agent — it may redirect to a CDN for native playback. See the Stream Fix section in `KNOWLEDGE_BASE.md`.
+>
+> The ONLY acceptable use of `externalUrl` is for **cross-navigation within Stremio** using `stremio:///detail/` deep links.
 
 ## Key Limitations
 
@@ -168,4 +175,4 @@ MIT
 
 ---
 
-*Built by [AiCurv](https://github.com/AiCurv) — Last updated: 2026-05-22*
+*Built by [AiCurv](https://github.com/AiCurv) — Last updated: 2026-06-07*
