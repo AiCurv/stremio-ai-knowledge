@@ -43,7 +43,9 @@
     "kvs_slug_required": "Store full video URLs from model pages or use embed URLs",
     "defaultVideoId_loop": "NEVER set defaultVideoId in channel meta \u2014 causes infinite back-loop in Stremio",
     "kvs_get_stream_ua_redirect": "KVS /get_stream/ URLs work as direct stream.url \u2014 Stremio's UA triggers 302 CDN redirect. NEVER use externalUrl for video streams.",
-    "missing_nav_streams": "Add externalUrl streams with stremio:///detail/channel/ deep links \u2014 meta.links alone is NOT enough. Users navigate from the streams list 95% of the time."
+    "missing_nav_streams": "Add externalUrl streams with stremio:///detail/channel/ deep links \u2014 meta.links alone is NOT enough. Users navigate from the streams list 95% of the time.",
+    "base64_ids_break_meta": "NEVER use base64/base64url for Stremio IDs. Use encodeURIComponent/decodeURIComponent instead. Base64 produces opaque strings that can't be used as URL paths and break the meta handler (Error #16).",
+    "non_kvs_no_embed_needed": "Not all adult sites are KVS. Check site structure first. Some sites (like xxdbx.com) have everything on /view/{id} \u2014 no embed page needed."
   },
   "app_limitations": {
     "library_is_manual": "User must explicitly click 'Add to Library' \u2014 there is no programmatic way to add items to a user's library.",
@@ -96,6 +98,20 @@
           "notWebReady": true
         }
       }
+    }
+  },
+  "id_encoding": {
+    "rule": "ALWAYS use encodeURIComponent/decodeURIComponent for Stremio IDs that contain names",
+    "correct": {
+      "encoding": "encodeURIComponent('Della Cate')",
+      "result": "star_Della%20Cate",
+      "decoding": "decodeURIComponent('Della%20Cate')",
+      "decoded": "Della Cate"
+    },
+    "wrong": {
+      "encoding": "Buffer.from('Della Cate').toString('base64url')",
+      "result": "star_RGVsbGEgQ2F0ZQ",
+      "problem": "Opaque string, can't be used as URL path, meta handler can't decode it to scrape /stars/Della+Cate"
     }
   },
   "stream_fix_v2": {
