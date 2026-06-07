@@ -3,7 +3,7 @@
     "name": "stremio-ai-knowledge",
     "version": "2.0.0",
     "description": "AI Agent Knowledge Base for Stremio Addon Development",
-    "updated": "2026-06-07"
+    "updated": "2026-06-08"
   },
   "critical_versions": {
     "node": ">=16",
@@ -36,6 +36,23 @@
       "description": "Live TV channels.",
       "usage": "Live streaming television channels."
     }
+  },
+  "site_extractor": {
+    "name": "Stremio Site Extractor",
+    "version": "1.0.0",
+    "type": "firefox_mobile_addon",
+    "purpose": "Extracts complete website structure data for AI agents to build Stremio addons without manual inspection",
+    "repo": "https://github.com/AiCurv/stremio-site-extractor",
+    "download": "https://github.com/AiCurv/stremio-site-extractor/releases/download/v1.0.0/stremio-site-extractor-1.0.0.xpi",
+    "install_notes": "Set xpinstall.signatures.required=false in Firefox about:config",
+    "output_format": "JSON with stremioBlueprint, urlPatterns, pages, and site sections",
+    "key_outputs": [
+      "urlPatterns with regex for every page type",
+      "CSS selectors for video cards, pagination, metadata, video sources",
+      "Video source analysis (player type, auth tokens, CDN host)",
+      "Pre-built Stremio manifest and handler implementation strategies",
+      "Warnings about auth tokens, referer headers, and common pitfalls"
+    ]
   },
   "errors_quick": {
     "kvs_404_no_slug": "Use /embed/{id}/ instead of /video/{id}/ \u2014 KVS requires slug in video URLs",

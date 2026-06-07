@@ -8,12 +8,13 @@ A step-by-step workflow for AI agents (and humans) to build Stremio addons from 
 
 Building a Stremio addon is a systematic process:
 
-1. **Analyze** the target site
-2. **Map** its structure
-3. **Extract** video sources
-4. **Build** the addon
-5. **Deploy** to Vercel
-6. **Document** findings
+1. **Extract** site structure using the Stremio Site Extractor tool
+2. **Analyze** the extraction report
+3. **Map** its structure from the report
+4. **Extract** video sources (method determined by report)
+5. **Build** the addon using the blueprint from the report
+6. **Deploy** to Vercel
+7. **Document** findings
 
 ---
 
@@ -56,6 +57,38 @@ RIGHT: BOTH meta.links AND stream.externalUrl → users can navigate from everyw
 ```
 
 If you only implement one, implement the STREAM NAVIGATION. It's 10x more useful than meta links.
+
+---
+
+## Step 0: Use Stremio Site Extractor (RECOMMENDED)
+
+**Why:** Many AI agents skip proper site analysis and jump straight to coding, resulting in broken addons. The Stremio Site Extractor is a Firefox Mobile addon that extracts EVERYTHING an AI needs from a website — URL patterns, CSS selectors, video sources, player types, auth tokens, and generates a pre-built Stremio addon blueprint.
+
+### What It Extracts
+
+- **URL patterns** with regex for every page type (videos, models, channels, tags, dates, search)
+- **CSS selectors** for every important element (video cards, pagination, metadata, video sources)
+- **Video source analysis** — detects player framework (FluidPlayer, JW Player, Video.js), finds MP4/M3U8 URLs, analyzes auth tokens
+- **Tech stack detection** — jQuery, lazy loaders, rendering type
+- **Ad network detection** — ExoClick, TrafficStars, etc.
+- **Stremio addon blueprint** — pre-built manifest, catalog/meta/stream handler strategies with selectors
+
+### How to Use
+
+1. Install the addon in Firefox Mobile (set `xpinstall.signatures.required` to `false` in `about:config`)
+2. Navigate to the target website
+3. Tap the Stremio Site Extractor icon → Start Extraction
+4. Download the JSON report when done
+5. Feed the JSON to the AI agent building the addon
+
+### Download
+
+- **GitHub:** https://github.com/AiCurv/stremio-site-extractor
+- **XPI:** https://github.com/AiCurv/stremio-site-extractor/releases/download/v1.0.0/stremio-site-extractor-1.0.0.xpi
+
+### If You Can't Use the Extractor
+
+If the extractor is not available, proceed with Steps 1-7 below for manual site analysis.
 
 ---
 
@@ -419,4 +452,4 @@ vercel --prod
 
 ---
 
-*Last updated: 2026-06-07*
+*Last updated: 2026-06-08*
