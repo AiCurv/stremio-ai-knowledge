@@ -271,6 +271,8 @@ A living database of errors encountered during Stremio addon development. Each e
 | 8 | Can't get tags from embed | Use canonical link from embed page |
 | 9 | KVS /get_stream/ "error 1" or "none of the available extractors" | Use direct `url` streams with get_stream URLs — Stremio's UA triggers 302 CDN redirect. NEVER use externalUrl. |
 | 10 | Cloudflare blocks scraping | Switch target or use Cloudflare-solving proxy |
+| 11 | CDN stream 403 from user IP | Stream proxy on Vercel (same IP for fetch+play) |
+| 12 | Custom type breaks library/cross-nav | Use standard channel+movie types (W1MP pattern) |
 
 ---
 
@@ -282,6 +284,7 @@ A living database of errors encountered during Stremio addon development. Each e
 | Vercel Hobby | 1 (Error #2) | High — 10s timeout is a real constraint |
 | WordPress | 0 | Low — standard HTML, easy to scrape |
 | Cloudflare-protected | 1 (Error #10) | High — may block requests entirely |
+| Custom content types | 1 (Error #12) | Critical — breaks library + cross-navigation |
 
 ---
 
@@ -325,3 +328,74 @@ Create a serverless proxy endpoint that:
 **Not to be confused with:**
 - KVS encrypted anti-leeching (Error #9) — that uses generate_mp4() with AES decryption
 - Cloudflare blocking (Error #10) — that blocks the scraping request, not the stream playback
+
+---
+
+### ERROR #12: Custom content types (e.g., "curvcorn") break Library and cross-navigation
+
+- **Context:** Any Stremio addon using a custom content type like "curvcorn" instead of the standard "channel" and "movie" types.
+- **Symptom:**
+  1. Clicking on tag/star cross-navigation links in stream cards does nothing — Stremio can't navigate to the page
+  2. Stars/tags/channels cannot be added to Stremio Library — no "Add to Library" button
+  3. Channel-type meta (with `videos` array) doesn't render as a browsable video list — Stremio doesn't know how to display custom types as channels
+  4. Search doesn't return channel-type results for stars/tags — only video results appear
+- **Root Cause:** Stremio only understands three content types natively: `movie`, `series`, and `channel`. Custom types like `curvcorn` are treated as unknown — Stremio renders them as basic detail pages without channel features (video list, library add, auto-update).
+  
+  When you set `types: ["curvcorn"]` in the manifest and return `type: "curvcorn"` in meta responses, Stremio doesn't know the item is a channel. It renders it as a generic detail page with no video list and no library button.
+
+- **Fix:** Use the W1MP pattern — standard `channel` and `movie` types:
+  ```javascript
+  // WRONG — custom type breaks everything:
+  const manifest = {
+      types: ["curvcorn"],
+      catalogs: [
+          { type: "curvcorn", id: "stars", name: "Stars" },
+          { type: "curvcorn", id: "home", name: "Home" },
+      ],
+  };
+
+  // CORRECT — W1MP pattern with channel + movie:
+  const manifest = {
+      types: ["channel", "movie"],
+      resources: [
+          "catalog",
+          { name: "meta", types: ["channel", "movie"], idPrefixes: ["video_", "star_", "ch_", "tag_"] },
+          { name: "stream", types: ["movie"], idPrefixes: ["video_"] },
+      ],
+      catalogs: [
+          { type: "channel", id: "stars", name: "Stars" },    // Stars are channels!
+          { type: "channel", id: "tags", name: "Tags" },      // Tags are channels!
+          { type: "movie", id: "latest", name: "Latest" },    // Videos are movies
+          { type: "movie", id: "video_search", name: "Search" },
+      ],
+  };
+  ```
+
+  In meta handler, return `type: "channel"` for stars/tags with a `videos` array:
+  ```javascript
+  // Star meta → channel type with videos list
+  if (type === "channel" && id.startsWith("star_")) {
+      return {
+          meta: {
+              id, type: "channel",
+              name: "Della Cate",
+              videos: [/* ... */],       // Shows as clickable list
+              genres: ["Star"],
+          }
+      };
+  }
+  ```
+
+  In stream handler, cross-navigation uses `stremio:///detail/channel/` deep links:
+  ```javascript
+  streams.push({
+      name: "Star",
+      title: "⭐ Della Cate",
+      externalUrl: "stremio:///detail/channel/star_RGVsbGEgQ2F0ZQ",
+      behaviorHints: { notWebReady: true },
+  });
+  ```
+
+- **Prevention:** ALWAYS use standard Stremio types (`channel`, `movie`, `series`). Custom types should ONLY be used if you specifically want items isolated in a separate Discover section AND you don't need library/cross-navigation features. For adult content addons where library and cross-navigation are essential, `channel` + `movie` is the correct pattern (proven by W1MP addon).
+
+- **Trade-off note:** Using `channel` + `movie` means the addon's catalogs appear in the standard "Channels" and "Movies" sections of Stremio's Discover, mixed with other addons' content. Custom types get their own section but lose all channel functionality.

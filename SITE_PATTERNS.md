@@ -458,34 +458,67 @@ https://d.v1d30.com/{TOKEN}/{VIDEO_ID}{QUALITY_CODE}/{QUALITY}.mp4
 
 The `64` and `96` likely indicate dimensions (640px, 960px width). SUFFIX varies per video.
 
-### Recommended Addon Architecture for xxdbx.com
+### Recommended Addon Architecture for xxdbx.com (v3.0.0 — W1MP Pattern)
+
+**⚠️ IMPORTANT: Use `channel` + `movie` types, NOT custom types like `curvcorn`!**
+
+Custom types (like `curvcorn`) don't support Stremio's "Add to Library" feature for channels. The W1MP pattern uses standard `channel` and `movie` types, which enables full library support, proper channel pages with video lists, and cross-navigation that actually works when clicked.
 
 ```
-Content Type: curvcorn (custom type, appears as separate section in Discover)
+Content Types: channel (for stars, channels, tags, dates) + movie (for videos)
+
+ID Prefixes:
+  - video_    → /view/{id} (movie type — has streams)
+  - star_     → /stars/{name} (channel type — has videos array, addable to library)
+  - ch_       → /channels/{name} (channel type — has videos array, addable to library)
+  - tag_      → /search/{tag} (channel type — has videos array, addable to library)
+  - date_     → /dates/{date} (channel type — has videos array, addable to library)
+
+ID Encoding: Star/channel/tag names are base64url-encoded for URL-safe Stremio IDs
+  - e.g., "Della Cate" → star_RGVsbGEgQ2F0ZQ
+  - Decode with: Buffer.from(encoded, 'base64url').toString('utf-8')
 
 Catalogs:
-  - type: curvcorn, id: "xxdbx_home"
+  - type: channel, id: "stars"
+    - Search: extracts unique stars from /search/{query} results
+    - Browse: extracts stars from home + popular page video cards
+  - type: channel, id: "channels"
+    - Search: extracts unique channels from /search/{query} results
+    - Browse: extracts channels from home + popular page video cards
+  - type: channel, id: "tags"
+    - Search: fetches video detail to extract /search/ genre tags
+  - type: channel, id: "dates"
+    - Search: direct date lookup (YYYY-MM-DD or YYYY format)
+    - Browse: extracts dates from home + popular page video cards
+  - type: movie, id: "video_search" (search-only)
+    - Search: /search/{query} returns video results
+  - type: movie, id: "latest"
     - Browse: / (paginated with ?page=N)
-    - Search: /search/{query}
-  - type: curvcorn, id: "xxdbx_popular"
+  - type: movie, id: "popular"
     - Browse: /most-popular (paginated)
-  - type: curvcorn, id: "xxdbx_stars"
-    - Search: extracts unique stars from search results
-  - type: curvcorn, id: "xxdbx_channels"
-    - Search: extracts unique channels from search results
-  - type: curvcorn, id: "xxdbx_tags"
-    - Search: fetches video detail to extract search/genre tags
 
 Meta:
-  - Video (xxdbx: prefix): /view/{id} → title, poster, genres, cast, links
-  - Star (xxdbx_star: prefix): /stars/{name} → name, videos array
-  - Channel (xxdbx_channel: prefix): /channels/{name} → name, videos array
-  - Tag (xxdbx_tag: prefix): /search/{tag} → name, videos array
+  - movie (video_ prefix): /view/{id} → title, poster, genres, cast, links
+    - links[] includes cross-nav to stars, channels, tags, dates
+  - channel (star_ prefix): /stars/{name} → name, videos array (up to 5 pages)
+  - channel (ch_ prefix): /channels/{name} → name, videos array (up to 5 pages)
+  - channel (tag_ prefix): /search/{tag} → name, videos array (up to 3 pages)
+  - channel (date_ prefix): /dates/{date} → name, videos array (up to 3 pages)
 
-Stream:
-  - /view/{id} → <video#p><source> → Direct MP4 URLs (3 qualities)
-  - Star cross-nav streams: stremio:///detail/curvcorn/xxdbx_star:{slug}
-  - Tag cross-nav streams: stremio:///detail/curvcorn/xxdbx_tag:{slug}
+Stream (movie type only, video_ prefix):
+  1. Video streams: /play/{id}/{quality}.mp4 (proxied from Vercel for IP-bound tokens)
+     - Up to 3 qualities: 1080p FHD, 720p HD, 360p
+  2. Star cross-nav: externalUrl → stremio:///detail/channel/star_{encoded}
+  3. Channel cross-nav: externalUrl → stremio:///detail/channel/ch_{encoded}
+  4. Tag cross-nav: externalUrl → stremio:///detail/channel/tag_{encoded}
+  5. Date cross-nav: externalUrl → stremio:///detail/channel/date_{date}
+
+Cross-Navigation Pattern (W1MP-style):
+  - Everything in the "red circle" (date, channel, star, tags) becomes a CHANNEL
+  - Users can add channels to their Stremio Library for auto-updating
+  - Clicking a cross-nav stream opens the channel page in Stremio
+  - Channel pages show a list of videos (like episodes) that users can click to play
+  - Search returns both videos (movie results) and channels (channel results)
 ```
 
 ### Deployment
@@ -493,7 +526,7 @@ Stream:
 - **Vercel URL:** https://xxdbx-addon.vercel.app
 - **Manifest URL:** https://xxdbx-addon.vercel.app/manifest.json
 - **GitHub Repo:** AiCurv/curvcorn-stremio (xxdbx-addon subfolder)
-- **Version:** 2.1.0 (stream proxy for IP-bound tokens)
+- **Version:** 3.0.0 (W1MP pattern — channel+movie types, library support)
 
 ---
 
