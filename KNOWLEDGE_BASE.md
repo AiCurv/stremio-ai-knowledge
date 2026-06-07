@@ -14,6 +14,9 @@ Complete templates and patterns for building Stremio addons. Every code block is
 6. [Catalog Handler Pattern](#6-catalog-handler-pattern)
 7. [Meta Handler Pattern](#7-meta-handler-pattern)
 8. [Stream Handler Pattern](#8-stream-handler-pattern)
+9. [Stream Fix: Direct MP4 Playback via User-Agent Redirect (v2.0.0)](#9-stream-fix-direct-mp4-playback-via-user-agent-redirect-v200)
+10. [Meta `links` Field — Clickable Cross-Navigation](#10-meta-links-field--clickable-cross-navigation)
+11. [Multi-Prefix ID Strategy for Channel Types](#11-multi-prefix-id-strategy-for-channel-types)
 
 ---
 
@@ -397,7 +400,6 @@ builder.defineStreamHandler(async ({ type, id }) => {
  * Extract video stream from embed page
  */
 async function handleVideoStream(videoId) {
-    // Try embed page first (more reliable for KVS sites)
     const embedUrl = `${SITE_BASE}/embed/${videoId}/`;
     const html = await fetchPage(embedUrl);
     const $ = parseHTML(html);
@@ -428,15 +430,24 @@ async function handleVideoStream(videoId) {
         });
     }
 
-    // Method 3: Fallback to embed/externalUrl
+    // Method 3: JavaScript variable extraction (common in KVS)
     if (streams.length === 0) {
-        streams.push({
-            externalUrl: embedUrl,
-            title: 'Embed Player',
-            behaviorHints: {
-                notWebReady: true,
-            },
-        });
+        const scriptContent = $('script').text();
+        const videoUrlMatch = scriptContent.match(/(?:video_url|video_alt_url[0-9]?)\s*[:=]\s*["']([^"']+)["']/);
+        if (videoUrlMatch) {
+            streams.push({
+                url: videoUrlMatch[1],
+                title: 'Extracted MP4',
+                behaviorHints: { notWebReady: false },
+            });
+        }
+    }
+
+    // ⚠️ NEVER use externalUrl for video streams — it opens a TV browser/webview
+    // If no direct URL can be extracted, return empty streams and log the error
+
+    if (streams.length === 0) {
+        console.error(`No direct stream found for ${videoId}`);
     }
 
     return { streams };
@@ -475,15 +486,12 @@ module.exports = async (req, res) => {
     const path = url.pathname;
 
     try {
-        // The addon SDK getInterface() returns an object with a router
-        // that can handle incoming HTTP requests
         const { headers, body, statusCode } = await addon.router({
             path: path,
             query: Object.fromEntries(url.searchParams),
             method: req.method,
         });
 
-        // Apply response headers
         if (headers) {
             Object.entries(headers).forEach(([key, value]) => {
                 res.setHeader(key, value);
@@ -580,16 +588,12 @@ builder.defineCatalogHandler(async ({ type, id, extra }) => {
     try {
         if (search) {
             // ─── Search Mode ──────────────────────────────────
-            // Stremio passes the search string in extra.search
-            // Use the site's search endpoint
             const searchUrl = `${SITE_BASE}/search/?q=${encodeURIComponent(search)}`;
             const html = await fetchPage(searchUrl);
             const $ = parseHTML(html);
             results = parseSearchResults($, type);
         } else {
             // ─── Browse Mode ──────────────────────────────────
-            // Stremio uses skip for pagination (skip=0, skip=20, skip=40...)
-            // Convert to site's page number
             let browseUrl;
             if (type === 'channel' && id === 'models') {
                 browseUrl = page > 1
@@ -665,8 +669,6 @@ builder.defineMetaHandler(async ({ type, id }) => {
         const background = $('.model-cover').attr('src') || poster;
         const description = $('.model-bio').text().trim();
 
-        // ─── Build videos array ────────────────────────────────
-        // Each video becomes an "episode" under this channel
         const videos = [];
         $('.video-item').each((i, el) => {
             const elem = $(el);
@@ -677,7 +679,7 @@ builder.defineMetaHandler(async ({ type, id }) => {
 
             if (videoId && videoTitle) {
                 videos.push({
-                    id: buildId(videoId),   // This ID will be used in stream handler
+                    id: buildId(videoId),
                     title: videoTitle,
                     thumbnail: videoThumb.startsWith('http') ? videoThumb : `${SITE_BASE}${videoThumb}`,
                     released: new Date().toISOString(),
@@ -751,12 +753,10 @@ builder.defineStreamHandler(async ({ type, id }) => {
     const slug = extractSlug(id);
     const streams = [];
 
-    // Fetch the embed page
     const embedUrl = `${SITE_BASE}/embed/${slug}/`;
     const html = await fetchPage(embedUrl);
     const $ = parseHTML(html);
 
-    // Extract MP4 URL from <video><source> tag
     const videoSrc = $('video source').attr('src')
         || $('video').attr('src');
 
@@ -791,20 +791,11 @@ streams.push({
 });
 ```
 
-### Embed / iframe Stream (External URL)
+### ⚠️ NEVER Use `externalUrl` for Video Streams
 
-When you cannot extract a direct video URL, fall back to opening the embed page:
+**`externalUrl` opens a TV browser/webview — users HATE this experience.** Always extract the direct video URL (MP4 or M3U8) and return it as `stream.url`. If you cannot extract a direct URL, investigate the User-Agent redirect behavior (see Section 9 below) before giving up.
 
-```javascript
-// Use externalUrl to open the embed page in Stremio's web view
-streams.push({
-    externalUrl: 'https://example.com/embed/12345/',
-    title: 'Embed Player',
-    behaviorHints: {
-        notWebReady: true,  // Required for external URLs
-    },
-});
-```
+The ONLY acceptable use of `externalUrl` is for **cross-navigation within Stremio** using `stremio:///` deep links (e.g., navigating from a video to a model page). This is done via `stream.externalUrl` with `stremio:///detail/...` URLs, which open within Stremio itself — NOT a browser.
 
 ### Complete Stream Handler with All Methods
 
@@ -814,7 +805,6 @@ builder.defineStreamHandler(async ({ type, id }) => {
     const streams = [];
 
     try {
-        // Strategy: Try embed page first (most reliable for KVS sites)
         const embedUrl = `${SITE_BASE}/embed/${slug}/`;
         const html = await fetchPage(embedUrl);
         const $ = parseHTML(html);
@@ -857,13 +847,10 @@ builder.defineStreamHandler(async ({ type, id }) => {
             }
         }
 
-        // Method 4: Fallback to embed page as externalUrl
+        // If no direct stream found, log the error
+        // NEVER fall back to externalUrl for video — it opens a browser/webview
         if (streams.length === 0) {
-            streams.push({
-                externalUrl: embedUrl,
-                title: 'Embed Player',
-                behaviorHints: { notWebReady: true },
-            });
+            console.error(`No direct stream URL found for ${id}`);
         }
     } catch (err) {
         console.error(`Stream error for ${id}:`, err.message);
@@ -878,17 +865,123 @@ builder.defineStreamHandler(async ({ type, id }) => {
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
 | `url` | string | Yes* | Direct video URL (MP4, M3U8). Mutually exclusive with `externalUrl` and `infoHash`. |
-| `externalUrl` | string | Yes* | URL to open in web view. For iframe/embed pages. |
+| `externalUrl` | string | Yes* | ⚠️ **For cross-navigation ONLY** (`stremio:///` deep links). NEVER use for video playback — opens browser/webview. |
 | `infoHash` | string | Yes* | BitTorrent info hash (40 hex chars). For torrent streams. |
 | `sources` | string[] | No | Tracker announce URLs. Only for torrent streams. |
 | `title` | string | No | Display label shown to user (e.g., "1080p MP4"). |
-| `behaviorHints.notWebReady` | boolean | No | Set `true` for HLS and external URLs. |
+| `behaviorHints.notWebReady` | boolean | No | Set `true` for HLS streams. |
 
 *Exactly one of `url`, `externalUrl`, or `infoHash` must be provided per stream.
 
 ---
 
-## 9. Meta `links` Field — Clickable Cross-Navigation
+## 9. Stream Fix: Direct MP4 Playback via User-Agent Redirect (v2.0.0)
+
+### The Problem
+
+KVS platform sites like ThePornBang use `/get_stream/` URLs that appear to be direct MP4 links but actually serve as redirect gateways. When tested in a browser, these URLs trigger file downloads instead of streaming. This led to the false conclusion that they couldn't be used as native Stremio streams, and the old v1.x implementation incorrectly used `externalUrl` (opening a browser/webview — which users hated).
+
+### Root Cause Analysis
+
+ThePornBang's `/get_stream/` endpoint is a **redirect gateway**, not a direct media server:
+
+1. When a **browser User-Agent** requests the URL → server returns **200 HTML** (a player page)
+2. When a **non-browser/media-player User-Agent** requests the URL → server returns **302 redirect** → CDN (vkuser.net)
+
+The CDN (vkuser.net) serves proper MP4 files with:
+- `Content-Type: video/mp4`
+- `Accept-Ranges: bytes`
+- `206 Partial Content` support
+- `Content-Length` headers
+- `Content-Disposition: attachment` (for full requests) / `inline` (for range requests)
+
+### Key Discovery: User-Agent Based Redirect Behavior
+
+| User-Agent | Response |
+|---|---|
+| Browser (Chrome, Firefox, etc.) | 200 HTML (player page) |
+| "Stremio" UA | 302 → CDN redirect ✓ |
+| Android stagefright UA | 302 → CDN redirect ✓ |
+| VLC UA | 200 HTML |
+| ffmpeg UA | 200 HTML |
+| curl default UA | 200 HTML |
+| No UA / empty UA | 200 or 302 (inconsistent) |
+
+**The critical insight:** Stremio's internal player uses its own User-Agent (not a browser UA) when requesting stream URLs. This means the `/get_stream/` URL automatically returns a 302 redirect to the CDN when Stremio requests it — **no browser, no webview needed!**
+
+### The Fix
+
+Instead of using `externalUrl` (which opens a browser/webview), extract the `get_stream` URLs from the page's `flashvars` JavaScript and return them as direct `url` streams:
+
+```javascript
+// flashvars format on the page:
+// video_url: 'https://www.thepornbang.com/get_stream/{id}-480.mp4?md5=...&timestamp=...'
+// video_alt_url: '...720p...'
+// video_alt_url2: '...1080p...'  
+// video_alt_url3: '...2160p...'
+
+streams.push({
+    name: 'Curvcorn',
+    title: '1080p FHD',
+    url: streamUrl,  // Direct get_stream URL with auth params
+});
+```
+
+When Stremio's player requests this URL:
+1. Stremio sends the request with its own User-Agent (not a browser UA)
+2. ThePornBang returns 302 → CDN redirect
+3. CDN serves the MP4 with proper streaming headers
+4. Video plays natively in Stremio — **NO browser, NO webview!**
+
+### Stream URL Format
+
+```
+https://www.thepornbang.com/get_stream/{videoId}-{quality}.mp4?md5={hash}&timestamp={ts}_{nonce}
+```
+
+- Quality options: 480, 720, 1080, 2160
+- `md5` and `timestamp` are time-limited auth parameters
+- URL expires after some time (user must re-request streams)
+
+### CDN Redirect Chain
+
+```
+Stremio Player → get_stream URL (thepornbang.com)
+                → 302 Redirect to vkuser.net CDN
+                → CDN serves MP4 (200/206 with range support)
+```
+
+### Fallback: Proxy Endpoint
+
+If direct URLs don't work for some reason, there's a `/stream-proxy/` endpoint:
+- URL: `https://curvcorn-thepornbang.vercel.app/stream-proxy/{segment}/{quality}`
+- Our server fetches the video page, extracts stream URLs, and resolves the redirect
+- Returns 302 redirect to CDN URL or get_stream URL as fallback
+- Uses "Stremio" UA to reliably get 302 redirects from thepornbang.com
+
+### Cross-Navigation Streams
+
+Models and Tags are included as `externalUrl` streams with `stremio:///detail/curvcorn/{id}` URLs:
+- These navigate **WITHIN Stremio** (not a browser/webview)
+- Clicking a model stream card → opens that model's page in Stremio
+- Clicking a tag stream card → opens that tag's page in Stremio
+- This is the ONLY acceptable use of `externalUrl` — for in-app navigation, NOT video playback
+
+### What NOT To Do (Lessons Learned)
+
+1. **NEVER use `externalUrl` for video streams** — it opens a browser/webview, users hate it
+2. **NEVER assume MP4 URLs that trigger downloads are unplayable** — check the User-Agent behavior first
+3. **NEVER strip auth parameters from get_stream URLs** — they're required for the redirect
+4. **The `Content-Disposition: attachment` header on the CDN does NOT prevent Stremio from playing the stream** — Stremio's player handles this correctly
+
+### Files Changed
+
+- `addon.js`: Complete rewrite of `getVideoStreams()` — extracts URLs from flashvars, returns direct streams
+- `api/index.js`: Added `/stream-proxy/` and `/debug-streams/` endpoints
+
+---
+
+## 10. Meta `links` Field — Clickable Cross-Navigation
 
 The `links` array in a meta response creates clickable navigation links on Stremio's detail page. This is the key mechanism for enabling users to navigate between related content (e.g., from a video to a model page, or from a video to a tag page).
 
@@ -914,10 +1007,8 @@ The `links` array in a meta response creates clickable navigation links on Strem
 ### Complete Example: Video Meta with Models, Categories, and Tags
 
 ```javascript
-// When building a video's meta, add links to related content:
 const links = [];
 
-// Models (yellow tags on KVS sites) → navigate to model channel page
 for (const model of pageData.models) {
     links.push({
         name: model.name,
@@ -926,7 +1017,6 @@ for (const model of pageData.models) {
     });
 }
 
-// Categories (gray category tags) → navigate to category channel page
 for (const cat of pageData.categories) {
     links.push({
         name: cat.name,
@@ -935,7 +1025,6 @@ for (const cat of pageData.categories) {
     });
 }
 
-// Tags (gray keyword tags - limit to 5) → navigate to tag channel page
 for (const tag of pageData.tags.slice(0, 5)) {
     links.push({
         name: tag.name,
@@ -948,7 +1037,7 @@ const meta = {
     id: "video_12345",
     type: "movie",
     name: "Video Title",
-    links: links,  // This creates clickable links in Stremio's detail page
+    links: links,
 };
 ```
 
@@ -962,7 +1051,7 @@ const meta = {
 
 ---
 
-## 10. Multi-Prefix ID Strategy for Channel Types
+## 11. Multi-Prefix ID Strategy for Channel Types
 
 When building an addon with multiple navigable entities (models, tags, categories), use a separate ID prefix for each entity type. This allows Stremio to route requests correctly.
 
@@ -1000,16 +1089,16 @@ const manifest = {
 ```javascript
 builder.defineMetaHandler(async ({ id, type }) => {
     if (type === "channel" && id.startsWith("model_")) {
-        // Handle model page → fetch /models/{slug}/?sort_by=post_date
+        // Handle model page
     }
     if (type === "channel" && id.startsWith("tag_")) {
-        // Handle tag page → fetch /tags/{slug}/
+        // Handle tag page
     }
     if (type === "channel" && id.startsWith("cat_")) {
-        // Handle category page → fetch /categories/{slug}/
+        // Handle category page
     }
     if (type === "movie" && id.startsWith("video_")) {
-        // Handle video → fetch /embed/{id}/ + full page for tags
+        // Handle video
     }
     return { meta: {} };
 });
