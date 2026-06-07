@@ -182,6 +182,8 @@ A living database of errors encountered during Stremio addon development. Each e
 | 6 | Videos not sorted by date | Add ?sort_by=post_date to model page URLs |
 | 7 | All video dates same | Use videoId as date proxy with calibration |
 | 8 | Can't get tags from embed | Use canonical link from embed page |
+| 9 | KVS /get_stream/ "error 1" | Use proxy player page with site's own kt_player.js |
+| 10 | Cloudflare blocks scraping | Switch target or use Cloudflare-solving proxy |
 
 ---
 
@@ -196,4 +198,65 @@ A living database of errors encountered during Stremio addon development. Each e
 
 ---
 
-*Last updated: 2026-05-22*
+### ERROR #9: KVS /get_stream/ URLs return "error 1" — encrypted anti-leeching protection
+
+- **Context:** KVS (Kernel Video Sharing) sites like thepornbang.com that use `generate_mp4()` encryption. When trying to use the `/get_stream/{videoId}-{quality}.mp4?md5=...&timestamp=...` URLs directly as stream URLs in Stremio.
+- **Symptom:** Stremio shows "none of the available extractors" error when tapping play. The `/get_stream/` URL returns `"error 1"` (7 bytes) when fetched programmatically, and the Content-Type is `text/html; charset=UTF-8` instead of `video/mp4`.
+- **Root Cause:** KVS uses a sophisticated anti-leeching system with encrypted video URLs. The `/get_stream/` URLs are NOT direct MP4 links — they are tokens that must be "unlocked" through a 2-step CryptoJS decryption process:
+  1. The video page contains `generate_mp4(encryptedData, key, commaIds, videoId)` call
+  2. `generate_mp4` decrypts the first parameter using CryptoJS AES-256-CBC with PBKDF2-SHA512
+  3. It makes an XHR GET request to the decrypted URL path
+  4. It decrypts the response
+  5. It makes an XHR POST to `/get_video/` with the re-encrypted data
+  6. Only then does the server allow the `/get_stream/` URL to serve actual video data
+  The kt_player.js is heavily obfuscated with string array rotation, making it impractical to replicate the decryption in Node.js.
+- **Fix:** Create a **proxy player page** that embeds the site's own `kt_player.js` with the `generate_mp4()` call. This lets the site's own JavaScript handle the decryption:
+  ```javascript
+  // Stream handler returns externalUrl to our proxy page
+  streams.push({
+      name: 'Curvcorn',
+      title: 'Play (Proxy Player)',
+      externalUrl: `${ADDON_BASE}/play/${videoSegment}`,
+      notWebReady: true,
+  });
+  ```
+  The proxy page (served by a Vercel serverless function at `/play/{segment}`) fetches the video page HTML, extracts the player scripts (`kt_player.js` + `generate_mp4()` + `flashvars`), and serves a minimal HTML page with just the player. The site's own JS handles all decryption and playback.
+  
+  **Implementation details:**
+  - Serverless function at `/api/index.js` intercepts `/play/` requests
+  - Fetches the video page from the target site
+  - Extracts `<script>` tags containing `kt_player.js`, `generate_mp4()`, and `flashvars`
+  - Serves a minimal HTML page with the player div and scripts
+  - The player auto-initializes and decrypts the video URL
+  - Stremio opens this page in its built-in web view
+- **Prevention:** Always check if KVS `/get_stream/` URLs actually serve video data (correct Content-Type: `video/mp4`, not `text/html`). If they return `"error 1"` or have wrong Content-Type, the site uses encrypted anti-leeching. Do NOT try to replicate the obfuscated decryption — use the proxy player approach instead.
+- **Detection test:**
+  ```bash
+  # Quick test: fetch a stream URL and check Content-Type
+  curl -sI "https://target.com/get_stream/123-480.mp4?md5=...&timestamp=..."
+  # If Content-Type is text/html → encrypted anti-leeching
+  # If Content-Type is video/mp4 → direct MP4, can use stream.url
+  ```
+
+---
+
+### ERROR #10: Cloudflare-protected target sites block server-side scraping
+
+- **Context:** Sites like hdthot.com that are behind Cloudflare's JavaScript challenge.
+- **Symptom:** Server-side fetch (node-fetch, curl without proper headers) returns HTTP 403 with Cloudflare challenge page. The addon works in browser but fails on Vercel.
+- **Root Cause:** Cloudflare requires JavaScript execution to solve a challenge before serving content. Server-side Node.js fetch cannot execute JavaScript.
+- **Fix:** Avoid Cloudflare-protected sites entirely. If you must use one:
+  1. Try using proper browser-like headers (User-Agent, Accept-Encoding: identity, Connection: keep-alive)
+  2. Use a CORS proxy as fallback (api.allorigins.win)
+  3. As last resort, use FlareSolverr or similar Cloudflare-solving proxy
+  For our case, switching from hdthot.com (Cloudflare) to thepornbang.com (accessible) was the correct solution.
+- **Prevention:** Always test target site accessibility before building an addon:
+  ```bash
+  curl -sI -H "Accept-Encoding: identity" -H "User-Agent: Mozilla/5.0" "https://target.com/"
+  # If you see "server: cloudflare" + 403 → site is Cloudflare-protected
+  # If you see 200 + proper HTML → site is accessible
+  ```
+
+---
+
+*Last updated: 2026-06-07*
