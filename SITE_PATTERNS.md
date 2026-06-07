@@ -67,6 +67,7 @@ Documented site structure and scraping patterns for building Stremio addons. Eac
 4. Extract `src` attribute — this is the direct MP4 URL
 
 ```javascript
+// Extraction code for w1mp.com
 async function extractStream(videoId) {
     const embedUrl = `https://w1mp.com/embed/${videoId}/`;
     const html = await fetchPage(embedUrl);
@@ -90,6 +91,7 @@ async function extractStream(videoId) {
     }
 
     if (videoUrl) {
+        // Ensure absolute URL
         if (!videoUrl.startsWith('http')) {
             videoUrl = `https://w1mp.com${videoUrl}`;
         }
@@ -100,9 +102,12 @@ async function extractStream(videoId) {
         };
     }
 
-    // No stream found — NEVER use externalUrl (opens browser/webview)
-    console.error(`No direct stream found for ${videoId}`);
-    return null;
+    // Last resort: return embed as externalUrl
+    return {
+        externalUrl: embedUrl,
+        title: 'Embed Player',
+        behaviorHints: { notWebReady: true },
+    };
 }
 ```
 
@@ -137,8 +142,7 @@ Meta:
   - movie: /embed/{id}/ → metadata from embed page
 
 Stream:
-  - /embed/{id}/ → <video><source> → MP4 URL (stream.url)
-  - NEVER use externalUrl for video streams
+  - /embed/{id}/ → <video><source> → MP4 URL
 ```
 
 ---
@@ -162,7 +166,7 @@ When approaching a new site, use these signals to identify the platform:
 
 ## Site: thepornbang.com
 
-- **Platform:** KVS (Kernel Video Sharing) — User-Agent-based redirect gateway
+- **Platform:** KVS (Kernel Video Sharing) — Enhanced with encrypted anti-leeching
 - **Cloudflare:** Behind Cloudflare CDN (but accessible with proper headers)
 - **Last Verified:** 2026-06-07
 
@@ -211,7 +215,7 @@ When approaching a new site, use these signals to identify the platform:
 | Pattern | URL | Notes |
 |---------|-----|-------|
 | Video page | `/video/{slug}_v{id}/` | Full page with player, metadata, related videos |
-| Stream URL | `/get_stream/{contentId}-{quality}.mp4?md5=...&timestamp=...` | **Direct MP4 via User-Agent redirect — see below** |
+| Stream token | `/get_stream/{contentId}-{quality}.mp4?md5=...&timestamp=...` | **ENCRYPTED — see below** |
 
 ### URL Convention
 
@@ -219,92 +223,39 @@ All entity URLs use the format: `/{entity_type}/{slug}_{typeChar}{id}/`
 - Type chars: `c`=category, `p`=pornstar, `s`=studio, `t`=tag, `v`=video
 - Example: `/category/big-tits_c18/` → slug="big-tits", type=c, id=18
 
-### Video Source Extraction — Direct MP4 via User-Agent Redirect (v2.0.0)
+### Video Source Extraction — CRITICAL
 
-**✅ ThePornBang's `/get_stream/` URLs work as direct `stream.url` streams in Stremio!**
+**⚠️ ThePornBang uses KVS encrypted anti-leeching (generate_mp4). Direct MP4 URLs DO NOT work.**
 
-The `/get_stream/` endpoint is a **User-Agent-based redirect gateway**:
+The `/get_stream/` URLs return `"error 1"` when fetched programmatically because KVS requires a 2-step CryptoJS decryption process via `generate_mp4()`:
 
-| User-Agent | Response |
-|---|---|
-| Browser (Chrome, Firefox, etc.) | 200 HTML (player page) — triggers download in browser |
-| "Stremio" UA | **302 → CDN redirect ✓** |
-| Android stagefright UA | **302 → CDN redirect ✓** |
-| VLC UA | 200 HTML |
-| ffmpeg UA | 200 HTML |
-| curl default UA | 200 HTML |
+1. Video page contains: `generate_mp4(encryptedData, key, commaIds, videoId)`
+2. The function decrypts `encryptedData` using AES-256-CBC with PBKDF2-SHA512
+3. Makes XHR GET to decrypted URL
+4. Decrypts response
+5. Makes XHR POST to `/get_video/` with re-encrypted data
+6. Only then are the `/get_stream/` URLs unlocked
 
-**The CDN (vkuser.net) serves proper MP4 files** with:
-- `Content-Type: video/mp4`
-- `Accept-Ranges: bytes`
-- `206 Partial Content` support
-- `Content-Length` headers
-- `Content-Disposition: attachment` (full requests) / `inline` (range requests)
+**The kt_player.js is heavily obfuscated** — string array rotation, hex encoding, variable name mangling. Replicating in Node.js is impractical.
 
-**How it works in Stremio:**
-1. Addon extracts `get_stream` URLs from the page's `flashvars` JavaScript
-2. Returns them as direct `url` streams (NOT `externalUrl`!)
-3. Stremio's player requests the URL with its own non-browser User-Agent
-4. ThePornBang returns `302 → CDN redirect`
-5. CDN serves the MP4 with proper streaming headers
-6. **Video plays natively in Stremio — NO browser, NO webview!**
+**✅ Proven Fix: Proxy Player Page**
 
-**Extraction code:**
+Create a serverless function that:
+1. Fetches the video page HTML
+2. Extracts `kt_player.js` script + `generate_mp4()` call + `flashvars` object
+3. Serves a minimal HTML page with the player
+4. The site's own JS handles decryption and playback
+5. Stremio opens this via `externalUrl` in its built-in web view
 
 ```javascript
-// flashvars format on the page:
-// video_url: 'https://www.thepornbang.com/get_stream/{id}-480.mp4?md5=...&timestamp=...'
-// video_alt_url: '...720p...'
-// video_alt_url2: '...1080p...'  
-// video_alt_url3: '...2160p...'
-
-const qualityMap = {
-    'video_alt_url3': { quality: '2160p UHD', suffix: '2160' },
-    'video_alt_url2': { quality: '1080p FHD', suffix: '1080' },
-    'video_alt_url':  { quality: '720p HD', suffix: '720' },
-    'video_url':      { quality: '480p SD', suffix: '480' },
-};
-
-for (const [varName, config] of Object.entries(qualityMap)) {
-    const match = flashvars.match(new RegExp(varName + "\\s*[:=]\\s*['\"]([^'\"]+)['\"]"));
-    if (match && match[1]) {
-        streams.push({
-            name: 'Curvcorn',
-            title: config.quality,
-            url: match[1],  // Direct get_stream URL with auth params
-        });
-    }
-}
+// Stream handler
+streams.push({
+    name: 'Curvcorn',
+    title: 'Play (Proxy Player)',
+    externalUrl: `${ADDON_BASE}/play/${videoSegment}`,
+    notWebReady: true,
+});
 ```
-
-**Stream URL format:**
-```
-https://www.thepornbang.com/get_stream/{videoId}-{quality}.mp4?md5={hash}&timestamp={ts}_{nonce}
-```
-- Quality options: 480, 720, 1080, 2160
-- `md5` and `timestamp` are time-limited auth parameters — DO NOT strip them
-- URL expires after some time (user must re-request streams)
-
-**CDN redirect chain:**
-```
-Stremio Player → get_stream URL (thepornbang.com)
-                → 302 Redirect to vkuser.net CDN
-                → CDN serves MP4 (200/206 with range support)
-```
-
-**Fallback: Proxy endpoint** (if direct URLs don't work for some reason):
-- URL: `https://curvcorn-thepornbang.vercel.app/stream-proxy/{segment}/{quality}`
-- Our server fetches the video page, extracts stream URLs, resolves the redirect
-- Returns 302 redirect to CDN URL or get_stream URL as fallback
-- Uses "Stremio" UA to reliably get 302 redirects from thepornbang.com
-
-### ⚠️ Critical: What NOT To Do
-
-1. ❌ **NEVER use `externalUrl` for video streams** — it opens a browser/webview, users HATE it
-2. ❌ **NEVER assume `/get_stream/` URLs are unplayable because they trigger downloads in browsers** — the server behavior depends on User-Agent
-3. ❌ **NEVER strip auth parameters** (md5, timestamp) from get_stream URLs — they're required for the redirect
-4. ❌ **The `Content-Disposition: attachment` header does NOT prevent Stremio from playing the stream** — Stremio's player handles this correctly
-5. ❌ **NEVER use a proxy player page approach** — the direct `stream.url` approach is simpler, faster, and gives native playback
 
 ### Scraping Notes
 
@@ -351,11 +302,193 @@ Meta:
   - Tag (t_ prefix): /tag/{segment}/ → name, videos array
 
 Stream:
-  - Direct MP4 via get_stream URLs (stream.url) — Stremio's UA triggers 302 CDN redirect
-  - Fallback: /stream-proxy/ endpoint with "Stremio" UA
-  - Cross-navigation: externalUrl with stremio:///detail/curvcorn/{id} for models/tags (in-app navigation only)
-  - ❌ NEVER use externalUrl for video playback
+  - Proxy player page (/play/{segment}) with externalUrl
+  - Fallback: direct link to video page on ThePornBang
 ```
+
+---
+
+## Site: xxdbx.com
+
+- **Platform:** Custom (plain HTML + jQuery + FluidPlayer)
+- **Cloudflare:** No
+- **Last Verified:** 2026-06-07
+- **Status:** ✅ WORKS PERFECTLY — Direct MP4 streams, no anti-leeching, no encryption
+
+### URL Patterns
+
+#### Home & Browsing
+
+| Pattern | URL | Notes |
+|---------|-----|-------|
+| Homepage (newest) | `/` or `/?page=N` | 30 videos per page |
+| Most Popular | `/most-popular` or `/most-popular?page=N` | Paginated |
+| Search/Tag | `/search/{query}` or `/search/{query}?page=N` | Same format for tags and search |
+| Star/Pornstar | `/stars/{name}` | URL-encoded name, e.g. `/stars/Bad%20Bella` |
+| Channel | `/channels/{name}` | e.g. `/channels/LegalPorno.com` |
+| Date | `/dates/{date}` | e.g. `/dates/2026` or `/dates/2026-03-09` |
+
+#### Videos
+
+| Pattern | URL | Notes |
+|---------|-----|-------|
+| Video detail | `/view/{id}` | e.g. `/view/22325971680` |
+| Stream CDN | `//d.v1d30.com/{TOKEN}/{VIDEO_ID}{QUALITY_CODE}/{QUALITY}.mp4` | Direct MP4, time-limited token |
+
+### Video Card DOM Selectors
+
+```css
+div.v                              → Video card container
+a[href^='/view/']                  → Video link (href contains /view/{id})
+.v_title                           → Video title
+.v_pic                             → Thumbnail img (use data-src for lazy, src for immediate)
+.v_dur                             → Duration (e.g. "34:34", "1:22:41")
+.v_preview[data-preview]           → Preview clip URL (//prev.xxdbx.com/{ID}3230.mp4)
+.v_tags a[href^='/stars/']         → Star/pornstar link
+.v_tags a[href^='/channels/']      → Channel/studio link
+.v_tags a[href^='/dates/']         → Date link
+.pagina a                          → Pagination links
+```
+
+### Video Detail Page Selectors
+
+```css
+article h1                         → Video title
+video#p                            → Video player element
+video#p[poster]                    → Poster image URL
+video#p source[src]                → Stream URL (direct MP4!)
+video#p source[title]              → Quality label ("360p", "720p", "1080p")
+.tags a[href^='/search/']          → Genre/category tags (Anal, Hardcore, Gonzo, etc.)
+.tags a[href^='/stars/']           → Star/pornstar links
+.tags a[href^='/channels/']        → Channel/studio links
+#desc                              → Description (optional, may be absent)
+```
+
+### Video Source Extraction
+
+**Method: Direct MP4 from `<source>` tags — SIMPLEST POSSIBLE**
+
+1. Fetch `/view/{id}` (the video detail page)
+2. Parse HTML with cheerio
+3. Find `video#p source` elements
+4. Extract `src` (stream URL) and `title` (quality label)
+5. Return as direct `url` streams — Stremio plays them natively!
+
+```javascript
+// Extraction code for xxdbx.com
+async function extractStreams(videoId) {
+    const detailUrl = `https://xxdbx.com/view/${videoId}`;
+    const html = await fetchPage(detailUrl);
+    const $ = cheerio.load(html);
+    const streams = [];
+
+    $("video#p source").each((_, el) => {
+        const src = $(el).attr("src");
+        const quality = $(el).attr("title"); // "360p", "720p", "1080p"
+        if (src) {
+            streams.push({
+                name: "XXDBX",
+                title: quality,
+                url: src.startsWith("//") ? "https:" + src : src,
+                behaviorHints: { notWebReady: false },
+            });
+        }
+    });
+
+    return streams;
+}
+```
+
+### Stream URL Format
+
+```
+https://d.v1d30.com/{TOKEN}/{VIDEO_ID}{QUALITY_CODE}/{QUALITY}.mp4
+```
+
+| Part | Example | Description |
+|------|---------|-------------|
+| CDN host | `d.v1d30.com` | Stream CDN |
+| TOKEN | `wp5z_h0Ie5ZX1F89k8Gkc45PQ` | Time-limited, unique per video+quality |
+| VIDEO_ID | `22325971` | Base video identifier |
+| QUALITY_CODE | `103`, `258`, `786` | Varies per quality (not a simple formula) |
+| QUALITY | `360`, `720`, `1080` | Resolution in pixels |
+
+**Always 3 qualities available: 360p, 720p, 1080p**
+
+### Stream Token Behavior
+
+- Tokens are **time-limited** (expire within minutes)
+- Each quality gets a **different token**
+- Tokens are generated **fresh on each page load**
+- The addon must **fetch the video detail page fresh** on each stream request
+- Cache the HTML for 5 minutes max — but be aware tokens may expire sooner
+- When a token expires, re-fetching the page generates new tokens
+
+### Key Advantages Over Other Sites
+
+1. **No anti-leeching encryption** — unlike KVS sites (thepornbang.com), no generate_mp4() decryption needed
+2. **No Cloudflare** — direct HTTP requests work perfectly
+3. **Simple HTML** — no SPA, no JavaScript rendering needed
+4. **Direct MP4** — streams play natively in Stremio's built-in player
+5. **No webview/externalUrl needed** — NO TV BROWSER!
+6. **3 quality levels** — 360p, 720p, 1080p always available
+7. **No embed page needed** — the main `/view/{id}` page has everything
+
+### Scraping Notes
+
+1. **No Cloudflare** — direct HTTP requests work without browser emulation
+2. **Lazy-loaded images** — thumbnails use `data-src` for lazy, `src` for first few images
+3. **30 videos per page** — consistent across all listing types
+4. **No master category/tag list page** — categories and tags are discovered from video cards
+5. **Search doubles as tag browser** — `/search/Anal` shows all "Anal" tagged videos
+6. **Stars can have multiple names** — e.g., "Bad Bella" and "Bad Bella XO" are separate star pages
+7. **Preview clips are publicly accessible** — `//prev.xxdbx.com/{ID}3230.mp4` returns 200 OK with `video/mp4`
+
+### Thumbnail URL Pattern
+
+| Type | Pattern | Example |
+|------|---------|---------|
+| Listing thumb | `/{VIDEO_ID}64{SUFFIX}.jpg` | `/2232597164360.jpg` |
+| Detail poster | `/{VIDEO_ID}96{SUFFIX}.jpg` | `/2232597196360.jpg` |
+
+The `64` and `96` likely indicate dimensions (640px, 960px width). SUFFIX varies per video.
+
+### Recommended Addon Architecture for xxdbx.com
+
+```
+Content Type: curvcorn (custom type, appears as separate section in Discover)
+
+Catalogs:
+  - type: curvcorn, id: "xxdbx_home"
+    - Browse: / (paginated with ?page=N)
+    - Search: /search/{query}
+  - type: curvcorn, id: "xxdbx_popular"
+    - Browse: /most-popular (paginated)
+  - type: curvcorn, id: "xxdbx_stars"
+    - Search: extracts unique stars from search results
+  - type: curvcorn, id: "xxdbx_channels"
+    - Search: extracts unique channels from search results
+  - type: curvcorn, id: "xxdbx_tags"
+    - Search: fetches video detail to extract search/genre tags
+
+Meta:
+  - Video (xxdbx: prefix): /view/{id} → title, poster, genres, cast, links
+  - Star (xxdbx_star: prefix): /stars/{name} → name, videos array
+  - Channel (xxdbx_channel: prefix): /channels/{name} → name, videos array
+  - Tag (xxdbx_tag: prefix): /search/{tag} → name, videos array
+
+Stream:
+  - /view/{id} → <video#p><source> → Direct MP4 URLs (3 qualities)
+  - Star cross-nav streams: stremio:///detail/curvcorn/xxdbx_star:{slug}
+  - Tag cross-nav streams: stremio:///detail/curvcorn/xxdbx_tag:{slug}
+```
+
+### Deployment
+
+- **Vercel URL:** https://xxdbx-addon.vercel.app
+- **Manifest URL:** https://xxdbx-addon.vercel.app/manifest.json
+- **GitHub Repo:** AiCurv/curvcorn-stremio (xxdbx-addon subfolder)
+- **Version:** 1.0.0
 
 ---
 
