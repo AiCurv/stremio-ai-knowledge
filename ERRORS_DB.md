@@ -286,3 +286,42 @@ A living database of errors encountered during Stremio addon development. Each e
 ---
 
 *Last updated: 2026-06-07*
+
+
+---
+
+## #11 CDN Stream 403 — IP-Bound Tokens (xxdbx.com)
+
+**Date:** 2026-06-07
+**Site:** xxdbx.com (d.v1d30.com CDN)
+**Symptoms:** Direct MP4 URLs return 403 Forbidden when accessed from the user's Stremio device, even though the same URLs return 200 OK when accessed from the Vercel serverless function that generated them.
+
+**Root Cause:**
+- xxdbx.com's CDN (d.v1d30.com) generates stream URLs with tokens that are **IP-bound**
+- The token is valid only from the IP address that fetched the video page
+- When a Stremio server-side addon fetches the page from Vercel's IP and returns the MP4 URL, Stremio tries to play it from the user's IP → 403
+- This is different from time-limited tokens (where re-fetching works). IP-bound tokens can NEVER work cross-device.
+
+**Solution: Stream Proxy**
+Create a serverless proxy endpoint that:
+1. Receives the play request from Stremio
+2. Fetches the video page from the target site (from Vercel's IP)
+3. Extracts the MP4 URL with a valid token
+4. Fetches the MP4 data from the CDN (from Vercel's IP — matches the token!)
+5. Pipes the video data back to Stremio
+
+
+
+**Important:**
+- The proxy MUST support HTTP Range requests (206 Partial Content) for video seeking to work
+- The proxy MUST set proper CORS headers
+- Use the stable Vercel alias URL, not deployment-specific URLs (which may have Deployment Protection returning 401)
+- The proxy fetches the page FRESH on each request (no caching) to ensure valid tokens
+
+**Detection Pattern:**
+- If direct MP4 URLs work from your server but 403 from a browser/different IP → tokens are IP-bound
+- Test: curl the MP4 URL from your server → 200, then from a different machine → 403
+
+**Not to be confused with:**
+- KVS encrypted anti-leeching (Error #9) — that uses generate_mp4() with AES decryption
+- Cloudflare blocking (Error #10) — that blocks the scraping request, not the stream playback

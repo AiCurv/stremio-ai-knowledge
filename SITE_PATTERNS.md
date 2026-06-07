@@ -313,7 +313,7 @@ Stream:
 - **Platform:** Custom (plain HTML + jQuery + FluidPlayer)
 - **Cloudflare:** No
 - **Last Verified:** 2026-06-07
-- **Status:** ✅ WORKS PERFECTLY — Direct MP4 streams, no anti-leeching, no encryption
+- **Status:** ✅ WORKS with stream proxy — MP4 tokens are IP-bound, requires server-side proxy
 
 ### URL Patterns
 
@@ -415,14 +415,19 @@ https://d.v1d30.com/{TOKEN}/{VIDEO_ID}{QUALITY_CODE}/{QUALITY}.mp4
 
 **Always 3 qualities available: 360p, 720p, 1080p**
 
-### Stream Token Behavior
+### Stream Token Behavior — ⚠️ CRITICAL: IP-BOUND + TIME-LIMITED
 
-- Tokens are **time-limited** (expire within minutes)
+- Tokens are **IP-bound AND time-limited** — they only work from the IP that fetched the video page
 - Each quality gets a **different token**
 - Tokens are generated **fresh on each page load**
-- The addon must **fetch the video detail page fresh** on each stream request
-- Cache the HTML for 5 minutes max — but be aware tokens may expire sooner
-- When a token expires, re-fetching the page generates new tokens
+- **Direct MP4 URLs will 403 from the user's device** — the token was generated for Vercel's server IP, not the user's IP
+- **FIX: Stream Proxy** — the addon uses a `/play/{videoId}/{quality}.mp4` proxy endpoint on Vercel that:
+  1. Receives the play request from Stremio
+  2. Fetches the video page fresh from xxdbx.com (from Vercel's IP)
+  3. Extracts the MP4 URL with valid token
+  4. Forwards the MP4 data (including Range requests for seeking) back to Stremio
+- This ensures the token is always generated from and used by the same IP (Vercel's)
+- Range request support (HTTP 206) is critical for Stremio's built-in player to seek
 
 ### Key Advantages Over Other Sites
 
@@ -488,7 +493,7 @@ Stream:
 - **Vercel URL:** https://xxdbx-addon.vercel.app
 - **Manifest URL:** https://xxdbx-addon.vercel.app/manifest.json
 - **GitHub Repo:** AiCurv/curvcorn-stremio (xxdbx-addon subfolder)
-- **Version:** 1.0.0
+- **Version:** 2.1.0 (stream proxy for IP-bound tokens)
 
 ---
 
