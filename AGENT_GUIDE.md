@@ -140,62 +140,71 @@ Fill this out for each new site:
 #### Method 1: Direct MP4 from Embed Page (Best)
 
 ```javascript
-// Fetch embed page
 const html = await fetchPage(`https://site.com/embed/${videoId}/`);
 const $ = cheerio.load(html);
 
-// Extract from <video><source>
 const videoUrl = $('video source').attr('src');
 ```
 
 **Pros:** Simple, reliable, direct URL.
 **Cons:** Not all sites have embed pages.
 
-#### Method 2: JavaScript Variable Extraction
+#### Method 2: JavaScript Variable Extraction (flashvars)
 
 ```javascript
 const html = await fetchPage(pageUrl);
 const $ = cheerio.load(html);
 
-// Search all <script> tags for video URL variables
 const scripts = $('script').text();
 const match = scripts.match(/video_url\s*[:=]\s*["']([^"']+)["']/);
 const videoUrl = match ? match[1] : null;
 ```
 
-**Pros:** Works when video URL is in JS, not in HTML.
+**Pros:** Works when video URL is in JS, not in HTML. Common in KVS platforms.
 **Cons:** Pattern varies between sites; may need regex tuning.
 
-#### Method 3: M3U8 from Player Config
+#### Method 3: User-Agent Redirect Discovery (KVS get_stream)
+
+Some KVS sites use `/get_stream/` URLs that behave differently based on User-Agent:
+- **Browser UA** → returns 200 HTML (player page)
+- **Non-browser UA** (Stremio's player) → returns 302 redirect to CDN
 
 ```javascript
-// Look for HLS playlist URL in page data
-const match = scripts.match(/hls["']?\s*[:=]\s*["']([^"']+\.m3u8[^"']*)["']/);
+// Extract get_stream URLs from flashvars
+const match = scripts.match(/video_url\s*[:=]\s*["']([^"']+)["']/);
+if (match) {
+    streams.push({
+        url: match[1],  // Return as direct stream.url
+        title: '1080p FHD',
+    });
+}
+// Stremio's player uses a non-browser UA → server returns 302 → CDN → native playback!
+```
+
+**Pros:** Native playback in Stremio, no browser/webview needed.
+**Cons:** Requires testing User-Agent behavior to confirm the redirect.
+
+**How to test:**
+```bash
+# Browser UA → 200 HTML
+curl -sI -H "User-Agent: Mozilla/5.0" "https://target.com/get_stream/123-480.mp4?md5=..."
+# Stremio UA → 302 redirect
+curl -sI -H "User-Agent: Stremio" "https://target.com/get_stream/123-480.mp4?md5=..."
+```
+
+#### Method 4: M3U8 from Player Config
+
+```javascript
+const match = scripts.match(/hls["']?\s*[:=]\s*["']([^']+\.m3u8[^"']*)["']/);
 const m3u8Url = match ? match[1] : null;
 ```
 
 **Pros:** HLS streams are often higher quality with adaptive bitrate.
 **Cons:** Requires `notWebReady: true` in Stremio stream object.
 
-#### Method 4: External URL / Embed Fallback
-
-```javascript
-// If no direct URL can be extracted, use the embed page as externalUrl
-return {
-    externalUrl: `https://site.com/embed/${videoId}/`,
-    title: 'Embed Player',
-    behaviorHints: { notWebReady: true },
-};
-```
-
-**Pros:** Always works if embed page exists.
-**Cons:** User sees the site's player, not Stremio's native player.
-
 #### Method 5: API Endpoint Discovery
 
 ```javascript
-// Some sites have hidden API endpoints
-// Check network requests in browser DevTools for JSON endpoints
 const apiUrl = `https://site.com/api/video/${videoId}`;
 const response = await fetch(apiUrl);
 const data = await response.json();
@@ -205,17 +214,26 @@ const videoUrl = data.video_url || data.files?.hls || data.files?.mp4;
 **Pros:** Clean data, no HTML parsing needed.
 **Cons:** Undocumented APIs may change or require authentication.
 
+### ⚠️ NEVER Use `externalUrl` for Video Streams
+
+**`externalUrl` opens a browser/webview — users HATE this.** Before giving up on extracting a direct URL:
+1. Test the URL with different User-Agents (Method 3 above)
+2. Check if the URL triggers a redirect when accessed with a non-browser UA
+3. Look for flashvars or JavaScript variables containing stream URLs
+4. The ONLY acceptable use of `externalUrl` is for **cross-navigation within Stremio** using `stremio:///` deep links
+
 ### Extraction Decision Tree
 
 ```
 Start → Is there an embed page?
   ├─ Yes → Can you extract MP4/M3U8 from it?
-  │   ├─ Yes → Use Method 1 or 3
+  │   ├─ Yes → Use Method 1 or 4
   │   └─ No → Is there a JS variable with the URL?
   │       ├─ Yes → Use Method 2
-  │       └─ No → Use Method 4 (externalUrl)
+  │       └─ No → Check User-Agent redirect behavior (Method 3)
   └─ No → Check the video page itself
       ├─ JS variable with URL? → Use Method 2
+      ├─ get_stream URL? → Test with non-browser UA (Method 3)
       ├─ API endpoint? → Use Method 5
       └─ None of the above → Site may not be feasible
 ```
@@ -329,8 +347,10 @@ vercel --prod
 1. Check Cloudflare → usually no
 2. Map: /models/{slug}/, /video/{id}/{slug}/, /embed/{id}/, /search/?q=
 3. Extract: embed page → <video><source> → MP4 URL
+   OR: flashvars → get_stream URLs → test with non-browser UA → direct stream.url
 4. Build: channel type for models, movie type for standalone videos
 5. Gotcha: video page needs slug, use embed instead
+6. Gotcha: get_stream URLs may work via User-Agent redirect even if they trigger downloads in browser
 ```
 
 ### WordPress Sites
@@ -357,4 +377,4 @@ vercel --prod
 
 ---
 
-*Last updated: 2026-05-22*
+*Last updated: 2026-06-07*
