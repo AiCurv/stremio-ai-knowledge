@@ -273,6 +273,8 @@ A living database of errors encountered during Stremio addon development. Each e
 | 10 | Cloudflare blocks scraping | Switch target or use Cloudflare-solving proxy |
 | 11 | CDN stream 403 from user IP | Stream proxy on Vercel (same IP for fetch+play) |
 | 12 | Custom type breaks library/cross-nav | Use standard channel+movie types (W1MP pattern) |
+| 13 | Related section pollution — 20+ random models in streams | Use scoped selectors (.js-models-list, .top-player-items-wrap) NOT broad $("a[href*='/models/']") |
+| 14 | "No Streams found" from channel page videos | Add model_/tag_ to stream idPrefixes + extractVideoId() for compound IDs |
 
 ---
 

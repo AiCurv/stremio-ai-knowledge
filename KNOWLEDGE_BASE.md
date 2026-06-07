@@ -17,6 +17,8 @@ Complete templates and patterns for building Stremio addons. Every code block is
 9. [Stream Fix: Direct MP4 Playback via User-Agent Redirect (v2.0.0)](#9-stream-fix-direct-mp4-playback-via-user-agent-redirect-v200)
 10. [Meta `links` Field — Clickable Cross-Navigation](#10-meta-links-field--clickable-cross-navigation)
 11. [Multi-Prefix ID Strategy for Channel Types](#11-multi-prefix-id-strategy-for-channel-types)
+12. [Clickable Navigation Streams — Tags & Models as Clickable Channel Links (v3.0.0)](#12-clickable-navigation-streams--tags--models-as-clickable-channel-links-v300)
+13. [CRITICAL: DOM Scraping Pitfall — Related Section Pollution (v3.1.0)](#13-critical-dom-scraping-pitfall--related-section-pollution-v310)
 
 ---
 
@@ -1110,3 +1112,246 @@ builder.defineMetaHandler(async ({ id, type }) => {
 2. **Each entity type has its own prefix** prevents ID collisions and allows clean routing.
 3. **Streams only for `video_` prefix** — channel-type items don't have streams; users click individual videos from the video list.
 4. **Sort model pages by date** using `?sort_by=post_date` so newest videos appear first.
+
+---
+
+## 12. Clickable Navigation Streams — Tags & Models as Clickable Channel Links (v3.0.0)
+
+### The Feature
+
+When a user opens a video in Stremio, they see a list of "streams" — typically just the video playback options. But you can add **non-playable navigation streams** that, when clicked, navigate the user to another page within Stremio (like a model's channel page or a tag's channel page). This is done using `stream.externalUrl` with Stremio deep links.
+
+This is the EXACT same pattern used by the **TMDB Collections addon** — when you open a movie that's part of a collection, you see a stream entry that says "Click to view collection" and clicking it navigates to the collection page.
+
+### Why This Is Revolutionary
+
+Without navigation streams, users have to:
+1. Remember a model's name
+2. Go back to the addon's catalog
+3. Search for the model
+4. Find them in the results
+5. Open their page
+
+WITH navigation streams, users can:
+1. Open a video
+2. See "👤 Kwini Kim" in the streams list
+3. Click it → instantly on Kwini Kim's channel page
+4. Click "Add to Library" → done!
+
+This makes your addon feel like a premium streaming app with connected content, not just a list of isolated videos.
+
+### How It Works — The `externalUrl` Deep Link Pattern
+
+```javascript
+// In your stream handler, after adding the playable MP4 stream:
+streams.push({
+    name: "MySite",
+    title: "▶ Direct MP4",
+    url: mp4Url,
+    behaviorHints: { notWebReady: false },
+});
+
+// Then add navigation streams for models:
+for (const model of videoModels) {
+    streams.push({
+        name: "👤 Model",
+        title: `${model.name}\nClick to view model page`,
+        externalUrl: `stremio:///detail/channel/model_${model.slug}`,
+    });
+}
+
+// Then add navigation streams for tags:
+for (const tag of videoTags.slice(0, 5)) {
+    streams.push({
+        name: "🏷️ Tag",
+        title: `${tag.name}\nClick to browse tag`,
+        externalUrl: `stremio:///detail/channel/tag_${tag.slug}`,
+    });
+}
+```
+
+### Deep Link URL Reference
+
+| Deep Link Format | What It Does | Example |
+|---|---|---|
+| `stremio:///detail/{type}/{id}` | Opens a meta item's detail page | `stremio:///detail/channel/model_kwini-kim` |
+| `stremio:///detail/{type}/{id}/{videoId}` | Opens with a specific video selected | `stremio:///detail/channel/model_kwini-kim/video_492438` |
+| `stremio:///search?search={query}` | Opens Stremio search with a query | `stremio:///search?search=British` |
+
+For **web.stremio.com**, use `https://web.stremio.com/#/detail/{type}/{id}` instead. Detect the platform by checking if the request came from `web.stremio.com` in the origin header.
+
+### Stream Order Best Practice
+
+Put the playable stream FIRST, then models, then tags. Users expect the first option to be the video itself:
+
+```
+[0] ▶ Direct MP4          (playable - stream.url)
+[1] 👤 Model - Kwini Kim  (navigation - stream.externalUrl)
+[2] 👤 Model - Martin Spell (navigation - stream.externalUrl)
+[3] 🏷️ Tag - British     (navigation - stream.externalUrl)
+[4] 🏷️ Tag - Amateur     (navigation - stream.externalUrl)
+[5] 🏷️ Tag - Blowjob     (navigation - stream.externalUrl)
+```
+
+### Manifest Configuration Required
+
+Your stream resource MUST include all prefixes that might appear in stream IDs. If you only put `["video_"]` in the stream idPrefixes, Stremio might not route stream requests for videos accessed from channel pages correctly:
+
+```javascript
+const manifest = {
+    resources: [
+        "catalog",
+        { name: "meta", types: ["channel", "movie"], idPrefixes: ["model_", "tag_", "video_"] },
+        { name: "stream", types: ["channel", "movie"], idPrefixes: ["video_", "model_", "tag_"] },
+    ],
+    // ...
+};
+```
+
+### The "No Streams Found" Bug — Compound IDs from Channel Pages
+
+When a user clicks a video from a model's channel page, Stremio may send the stream request with a compound ID like `model_kwini-kim:video_492438`. If your stream handler only checks `id.startsWith("video_")`, it won't match and returns empty streams → "No Streams found".
+
+**Fix:** Extract the video ID from compound formats:
+
+```javascript
+function extractVideoId(id) {
+    // Direct format: video_12345
+    if (id.startsWith("video_")) return id.replace("video_", "");
+    // Compound format: model_slug:video_12345 or tag_slug:video_12345
+    const parts = id.split(":");
+    for (const part of parts) {
+        if (part.startsWith("video_")) return part.replace("video_", "");
+    }
+    return null;
+}
+
+builder.defineStreamHandler(async ({ id, type }) => {
+    const videoId = extractVideoId(id);
+    if (videoId) {
+        // Fetch the embed page and extract MP4 stream
+        const embedUrl = `${SITE_BASE}/embed/${videoId}/`;
+        // ... rest of stream extraction
+    }
+    // Channel items (models, tags) don't need streams
+    if (id.startsWith("model_") || id.startsWith("tag_")) {
+        return { streams: [] };
+    }
+    return { streams: [] };
+});
+```
+
+---
+
+## 13. CRITICAL: DOM Scraping Pitfall — Related Section Pollution (v3.1.0)
+
+### The Problem
+
+When scraping video pages to extract models and tags for navigation streams, the page often contains a "Related Videos" or "Recommended Videos" section at the bottom. This section contains video cards from OTHER videos, each with their own model links and tags. If you use a broad selector like `$("a[href*='/models/']")` or `$("a[href*='/tags/']")`, you will pick up ALL models from ALL related videos — potentially 20-50+ models that have NOTHING to do with the video the user is watching.
+
+### Real-World Example (w1mp.com / KVS Platform)
+
+A video page on w1mp.com contains:
+- **2 actual models** (in `.js-models-list` div, part of the video player section)
+- **22+ related video models** (in `.section-row.related .card` divs, from the "Related Videos" section)
+
+Using `$("a[href*='/models/']")` returns ALL 24+ models, making the streams list unusable — the user has to scroll past 20+ random models to find the tags.
+
+### The Fix — Use Specific Parent Container Selectors
+
+Instead of selecting ALL links on the page, scope your selectors to the video's own info section:
+
+```javascript
+// ❌ WRONG — picks up models from Related Videos section
+$("a[href*='/models/']").each((_, el) => { ... });
+
+// ✅ CORRECT — only picks up the video's own models
+$(".js-models-list a").each((_, el) => { ... });
+
+// ❌ WRONG — picks up tags from Related Videos section  
+$("a[href*='/tags/']").each((_, el) => { ... });
+
+// ✅ CORRECT — only picks up the video's own tags
+$(".top-player-items-wrap a[href*='/tags/']").each((_, el) => { ... });
+```
+
+### How to Find the Right Selectors
+
+1. **Fetch the page HTML** and load it with cheerio
+2. **Find all links** of the type you want (models, tags, categories)
+3. **Build the parent chain** for each link (walk up 4-6 levels of parents, recording tag + class)
+4. **Identify the container** that holds ONLY the video's own data (usually near the video player)
+5. **Identify the container** for related/recommended content (usually has class like `.related`, `.recommended`, `.similar`)
+6. **Scope your selector** to the video info container only
+
+Here's a diagnostic script you can run:
+
+```javascript
+// Diagnostic: Find all model links and their parent containers
+$("a").each((i, el) => {
+    const href = $(el).attr("href") || "";
+    if (href.includes("/models/") && !href.endsWith("/models/")) {
+        const text = $(el).text().trim();
+        if (text && text.length < 50 && !text.includes("See all")) {
+            // Build parent chain
+            const parents = [];
+            let parent = $(el).parent();
+            for (let d = 0; d < 6 && parent.length; d++) {
+                const cls = parent.attr("class") || "";
+                const tag = parent.get(0)?.tagName || "";
+                parents.push(`${tag}.${cls.split(" ").join(".")}`);
+                parent = parent.parent();
+            }
+            console.log(`"${text}" → parents: ${parents.join(" > ")}`);
+        }
+    }
+});
+```
+
+### KVS Platform DOM Structure (w1mp.com, and similar sites)
+
+| Element | Correct Selector | What It Contains |
+|---|---|---|
+| Video's own models | `.js-models-list a` | Only models credited in THIS video (2-3 typically) |
+| Video's own tags | `.top-player-items-wrap a[href*="/tags/"]` | Only tags for THIS video |
+| Video's own categories | `.top-player-items-wrap a[href*="/categories/"]` | Only categories for THIS video |
+| Related video models | `.section-row.related .card a[href*="/models/"]` | Models from OTHER videos — DO NOT USE |
+| Related video models | `.item-tool.model a` | Models from video cards in related section — DO NOT USE |
+| Model poster image | `img.image` (src contains `/contents/models/`) | Full-size model photo |
+| Model poster fallback | `data-model-id` attribute → construct CDN URL | When no `img.image` exists |
+| Model icon | `img[src*="_ico.jpg"]` | Small thumbnail (not ideal for poster) |
+
+### Model Poster Extraction Strategy
+
+Not all models have poster images. Use a fallback chain:
+
+```javascript
+let modelPoster = "";
+
+// 1. Full-size poster image (class="image")
+$("img.image").each((_, el) => {
+    const src = $(el).attr("src") || "";
+    if (src.includes("/contents/models/")) {
+        modelPoster = fixUrl(src);
+    }
+});
+
+// 2. Fallback: Use data-model-id to construct CDN URL
+if (!modelPoster) {
+    const modelIdMatch = html.match(/data-model-id="(\d+)"/);
+    if (modelIdMatch) {
+        modelPoster = `${CDN_STATIC}/contents/models/${modelIdMatch[1]}/${slug}.jpg`;
+    }
+}
+
+// Some models don't have photos at all — modelPoster will be ""
+// This is fine, Stremio handles missing posters gracefully
+```
+
+### What NOT To Do
+
+1. **NEVER use `$("a[href*='/models/']")` on a video page** — it picks up 20+ models from related videos
+2. **NEVER use `$("a[href*='/tags/']")` on a video page** without scoping to the video info section
+3. **NEVER assume all links on a page belong to the current video** — video pages have related sections, comments, sidebar content
+4. **NEVER skip the parent chain analysis** — always inspect the DOM structure before writing selectors
+5. **NEVER use models from `.card` elements inside `.related` sections** — these are from other videos
