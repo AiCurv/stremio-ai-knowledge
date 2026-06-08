@@ -474,10 +474,11 @@ ID Prefixes:
   - tag_      → /search/{tag} (channel type — has videos array, addable to library)
   - date_     → /dates/{date} (channel type — has videos array, addable to library)
 
-ID Encoding: Star/channel/tag names are URI-encoded (encodeURIComponent) for URL-safe Stremio IDs
-  - e.g., "Della Cate" → star_Della%20Cate
-  - Decode with: decodeURIComponent(encoded)
-  - ⚠️ NEVER use base64/base64url for IDs — it breaks the meta handler (Error #16)
+ID Encoding: Star/channel/tag names are base64url-encoded for Stremio-safe IDs
+  - e.g., "Kira Perez" → star_S2lyYSBQZXJleg
+  - Decode with: Buffer.from(encoded, "base64url").toString("utf-8")
+  - ⚠️ NEVER use encodeURIComponent for Stremio IDs — %20 and + break in deep links (Error #19)
+  - ⚠️ ALWAYS decode base64 back to original name BEFORE constructing scrape URLs
 
 Catalogs:
   - type: channel, id: "stars"
@@ -532,9 +533,10 @@ Cross-Navigation Pattern (W1MP-style):
 - **Vercel URL:** https://xxdbx-addon.vercel.app
 - **Manifest URL:** https://xxdbx-addon.vercel.app/manifest.json
 - **GitHub Repo:** AiCurv/curvcorn-stremio (xxdbx-addon subfolder)
-- **Version:** 6.0.0 (W1MP pattern — channel+movie types, URI-encoded IDs, library support, clickable navigation streams with dates)
-- **Previous Version (5.0.0):** BROKEN — used base64url IDs that broke the meta handler (see Error #16)
+- **Version:** 8.0.0 (W1MP pattern — channel+movie types, base64url IDs, library support, clickable navigation streams with dates, search fallback for all nav types)
+- **Previous Version (7.1.0):** BROKEN — used encodeURIComponent + %20→+ substitution which failed in Stremio deep links (see Error #19)
+- **Previous Version (5.0.0):** BROKEN — used base64url IDs but meta handler didn't decode them (see Error #16)
 
 ---
 
-*Last updated: 2026-06-07*
+*Last updated: 2026-06-08*

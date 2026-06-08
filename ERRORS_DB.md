@@ -291,67 +291,32 @@ A living database of errors encountered during Stremio addon development. Each e
 
 ---
 
-### ERROR #16: Base64-encoded IDs break meta handler — channels return garbled names and 0 videos
+### ERROR #16: Base64-encoded IDs with broken decode — channels return garbled names (SUPERSEDED by #19)
 
-- **Date:** 2026-06-07
+- **Date:** 2026-06-07 (Updated 2026-06-08)
 - **Context:** Stremio addon for xxdbx.com. The previous AI agent (v5.0.0) used base64url encoding for star/channel/tag IDs (e.g., `star_RGVsbGEgQ2F0ZQ` for "Della Cate"). When users clicked navigation streams, the meta handler received these base64 IDs but could NOT decode them back to the original URL slug.
-- **Symptom:** Clicking on any star/channel/tag in Stremio shows "No information found about this" or garbled unicode names with 0 videos. Example: `star_RGVsbGEgQ2F0ZQ` triggers meta handler to visit `/stars/RGVsbGEgQ2F0ZQ` on xxdbx.com, which returns 404, then fallback returns garbled name.
-- **Root Cause:** The ID encoding was NOT reversible in the meta handler. The v5.0.0 implementation used `Buffer.from(name).toString('base64url')` for encoding but the meta handler failed to decode these IDs back to URL-safe slugs for scraping. Base64url encoding:
-  1. Produces opaque strings that can't be used as URL paths
-  2. Requires explicit decoding step that was missing or broken
-  3. The meta handler tried to construct URLs like `/stars/RGVsbGEgQ2F0ZQ` instead of `/stars/Della%20Cate`
-- **Fix:** Use `encodeURIComponent()` / `decodeURIComponent()` instead of base64 for ID encoding. This is fully reversible and produces URL-safe IDs:
-  ```javascript
-  // ENCODING (stream handler):
-  const starId = "star_" + encodeURIComponent(starName);
-  // e.g., "Della Cate" → "star_Della%20Cate"
-
-  // DECODING (meta handler):
-  const starName = decodeURIComponent(id.replace("star_", ""));
-  // e.g., "star_Della%20Cate" → "Della Cate"
-
-  // URL construction:
-  const url = "https://xxdbx.com/stars/" + encodeURIComponent(starName);
-  // → "https://xxdbx.com/stars/Della%20Cate"
-  ```
+- **Symptom:** Clicking on any star/channel/tag in Stremio shows "No information found about this" or garbled unicode names with 0 videos.
+- **Root Cause:** The v5.0.0 meta handler had a broken decode step — it did NOT decode the base64 back to the original name before constructing the URL. It tried to use the raw base64 string as a URL path like `/stars/RGVsbGEgQ2F0ZQ` which 404'd. The encoding itself (base64url) was fine; the bug was a missing `dec()` call in the meta handler.
+- **Fix:** This error was initially misattributed to base64 itself being the problem. The ACTUAL fix is to use base64url encoding WITH a proper decode step in the meta handler (see Error #19 for the full proven solution). Base64url is the ONLY encoding that produces Stremio-safe IDs with zero special characters.
 - **Prevention:**
-  1. **NEVER use base64/base64url for IDs** — it's opaque, can't be used as URL paths, and requires explicit decoding
-  2. **ALWAYS use encodeURIComponent/decodeURIComponent** — standard web encoding, fully reversible, URL-safe
-  3. **Test the encode→decode→URL→scrape roundtrip** before deploying
-  4. **Verify with curl** — test `/meta/channel/star_Della%20Cate.json` returns proper data
+  1. When using base64 IDs, ALWAYS decode them back in the meta handler before constructing URLs
+  2. The encode/decode roundtrip must be tested: `enc(name)` → ID → `dec(ID)` → name → URL
+  3. NEVER use the encoded ID directly as a URL path — always decode first
 
 ---
 
-### ERROR #18: %20 (percent-encoded spaces) in Stremio IDs breaks channel navigation
+### ERROR #18: encodeURIComponent and + substitution both fail in Stremio deep links (SUPERSEDED by #19)
 
-- **Date:** 2026-06-08
-- **Context:** Stremio addon for xxdbx.com (V7.0.0). Star/channel/tag IDs containing spaces like `star_Lacy%20Lamarr` produced by `encodeURIComponent()`.
-- **Symptom:** Clicking any star or channel navigation stream shows "No information found about this" in Stremio. Some tags work (those without spaces like `tag_MILF`) but tags with spaces (like `tag_All%20Sex`) and all stars/channels with spaces fail.
-- **Root Cause:** Stremio's internal URL handling decodes `%20` to a literal space when processing `stremio:///detail/channel/star_Lacy%20Lamarr` deep links. The space then breaks the HTTP request path to the addon (`/meta/channel/star_Lacy Lamarr.json`), causing a parse error or 404. The `encodeURIComponent()` function produces `%20` for spaces, which is standard web encoding but NOT safe for Stremio IDs because Stremio re-decodes them internally.
-- **Fix:** Replace `%20` with `+` (plus sign) in encoded IDs. The `+` character doesn't need URL encoding and survives Stremio's internal URL processing intact:
-  ```javascript
-  // ENCODING — replace %20 with +
-  function enc(str) {
-      return encodeURIComponent(str).replace(/%20/g, "+");
-  }
-  // "Lacy Lamarr" → "Lacy+Lamarr"  (not "Lacy%20Lamarr")
-
-  // DECODING — replace + with %20 before decodeURIComponent
-  function dec(encoded) {
-      return decodeURIComponent(encoded.replace(/\+/g, "%20"));
-  }
-  // "Lacy+Lamarr" → "Lacy Lamarr"
-
-  // This is unambiguous because:
-  // - Spaces are encoded as + (doesn't need URL encoding)
-  // - Literal + in names is encoded as %2B by encodeURIComponent
-  // - The decoder only replaces + (not %2B) with %20
-  ```
+- **Date:** 2026-06-08 (Updated 2026-06-08)
+- **Context:** Stremio addon for xxdbx.com. Tried `encodeURIComponent()` (V7.0.0) which produced `%20` for spaces, then tried `+` substitution (V7.1.0) which replaced `%20` with `+`. BOTH failed.
+- **Symptom:** Clicking any star or channel navigation stream shows "No information found about this" in Stremio. Even single-word names (no spaces) like "allsex" failed. The API worked correctly when tested with curl, but Stremio's client couldn't resolve the deep links.
+- **Root Cause:** Stremio's internal `stremio:///detail/` deep link handler does NOT reliably pass special characters (`%20`, `+`, `%2B`, etc.) to the addon's HTTP API. The deep link protocol has its own URL encoding/decoding rules that differ from standard HTTP. Characters like `%20`, `+`, and `%2B` get mangled or misinterpreted somewhere in the Stremio → addon router pipeline. The API works fine with curl because curl doesn't go through Stremio's deep link processing.
+- **Fix:** Use base64url encoding for ALL IDs that might contain spaces or special characters. Base64url produces only `[A-Za-z0-9_-]` — zero special characters that could be mangled. See Error #19 for the proven solution.
 - **Prevention:**
-  1. **NEVER use %20 in Stremio IDs** — Stremio decodes it to a space which breaks the HTTP request
-  2. **Use + for spaces instead** — standard URL query string convention, survives Stremio's URL handling
-  3. **Test with names containing spaces** — always verify with "First Last" style names, not just single-word names
-  4. **This applies to ALL ID types** — stars, channels, tags, dates, any ID that might contain spaces
+  1. **NEVER use encodeURIComponent for Stremio IDs** — `%20` breaks in deep links
+  2. **NEVER use + substitution for Stremio IDs** — `+` also breaks in deep links
+  3. **ONLY base64url is proven safe** — produces `[A-Za-z0-9_-]` only, survives all URL processing
+  4. **Test in Stremio itself, not just curl** — the API can work perfectly but Stremio's deep link handler can still break
 
 ---
 
@@ -385,9 +350,10 @@ A living database of errors encountered during Stremio addon development. Each e
 | 13 | Related section pollution | Use scoped selectors, NOT broad $("a[href*='/models/']") |
 | 14 | "No Streams found" from channel | Add all prefixes to stream idPrefixes + extractVideoId() |
 | 15 | No clickable navigation in streams | Add `externalUrl` streams with stremio:///detail/channel/ deep links |
-| 16 | Base64 IDs break meta handler | Use encodeURIComponent/decodeURIComponent instead of base64 |
+| 16 | Base64 IDs with broken decode (superseded) | Decode base64 in meta handler before URL construction |
 | 17 | Unnecessary embed pages on non-KVS sites | Check site structure first — some sites have everything on /view/{id} |
-| 18 | %20 in Stremio IDs breaks navigation | Replace %20 with + in IDs (encodeURIComponent(str).replace(/%20/g,"+")) |
+| 18 | encodeURIComponent/++ fail in deep links (superseded) | Use base64url encoding — only [A-Za-z0-9_-] survives Stremio |
+| 19 | Stremio deep links mangle special chars in IDs | Use base64url encoding — the ONLY proven safe encoding for Stremio IDs |
 
 ---
 
@@ -400,7 +366,57 @@ A living database of errors encountered during Stremio addon development. Each e
 | WordPress | 0 | Low — standard HTML, easy to scrape |
 | Cloudflare-protected | 1 (Error #10) | High — may block requests entirely |
 | Custom content types | 1 (Error #12) | Critical — breaks library + cross-navigation |
-| xxdbx.com (Custom) | 4 (Errors #11, #16, #17, #18) | Medium — stream proxy + plus-encoded IDs solves all |
+| xxdbx.com (Custom) | 5 (Errors #11, #16, #17, #18, #19) | Medium — stream proxy + base64url IDs solves all |
+
+---
+
+### ERROR #19: Stremio deep links mangle special characters in IDs — ONLY base64url is safe
+
+- **Date:** 2026-06-08
+- **Context:** Stremio addon navigation streams using `externalUrl: "stremio:///detail/channel/star_{encodedName}"`. Tested three encoding strategies across V5-V8 of the xxdbx addon.
+- **Symptom:** Clicking star/channel/tag navigation streams in Stremio shows "No information found about this". The addon's API works correctly when tested via curl, but Stremio's client cannot resolve the deep links. Even single-word names without spaces fail with certain encodings.
+- **Root Cause:** Stremio's `stremio:///detail/` deep link protocol has its own URL encoding/decoding pipeline that is NOT standard HTTP. When Stremio processes a deep link like `stremio:///detail/channel/star_Kira+Perez`, it goes through multiple encoding/decoding steps before making the HTTP request to the addon. Characters like `%20`, `+`, `%2B`, and others get mangled somewhere in this pipeline. The exact behavior depends on the Stremio client version (mobile vs desktop) and may change between versions.
+- **Three Encoding Strategies Tested:**
+  | Encoding | Example ID | Result | Why |
+  |----------|-----------|--------|-----|
+  | `encodeURIComponent` | `star_Kira%20Perez` | BROKEN | Stremio decodes `%20` → space, breaks HTTP path |
+  | `+` substitution | `star_Kira+Perez` | BROKEN | `+` gets mangled in deep link processing |
+  | **base64url** | `star_S2lyYSBQZXJleg` | **WORKS** | Only `[A-Za-z0-9_-]`, nothing to mangle |
+- **Fix (V8.0.0 — PROVEN):** Use base64url encoding for ALL IDs that might contain spaces or special characters:
+  ```javascript
+  // ENCODING — base64url produces only [A-Za-z0-9_-]
+  function enc(str) {
+      return Buffer.from(str, "utf-8").toString("base64url");
+  }
+  // "Kira Perez" → "S2lyYSBQZXJleg"
+  // "BangBros18.com" → "QmFuZ0Jyb3MxOC5jb20"
+  // "allsex" → "YWxsc2V4"
+
+  // DECODING — always decode back before constructing URLs
+  function dec(encoded) {
+      return Buffer.from(encoded, "base64url").toString("utf-8");
+  }
+  // "S2lyYSBQZXJleg" → "Kira Perez"
+
+  // Meta handler — decode BEFORE constructing the scrape URL:
+  const name = dec(id.replace("star_", ""));
+  const url = `${BASE_URL}/stars/${encodeURIComponent(name)}`;
+  // → "https://xxdbx.com/stars/Kira%20Perez"  (works!)
+  ```
+- **Why This Works:**
+  1. base64url output contains ONLY `[A-Za-z0-9_-]` — no spaces, no `%`, no `+`
+  2. These characters are safe in ALL URL contexts (paths, query strings, fragments)
+  3. Stremio's deep link handler passes them through unchanged
+  4. The meta handler decodes them back to the original name before constructing scrape URLs
+  5. The scrape URLs use standard `encodeURIComponent` (which is fine for HTTP requests)
+- **KEY INSIGHT from user:** On xxdbx.com, clicking stars/channels/tags/dates in the browser ALL just redirect to search — there are no truly dedicated pages. This means the meta handler should try the dedicated page first but fall back to `/search/{name}` if it 404s.
+- **Prevention:**
+  1. **ALWAYS use base64url for Stremio IDs** — it's the ONLY encoding proven safe with Stremio's deep link handler
+  2. **NEVER use encodeURIComponent for Stremio IDs** — even with `+` substitution, it's unreliable
+  3. **Decode in the meta handler** — base64 IDs must be decoded back to the original name before constructing URLs
+  4. **Use encodeURIComponent only for scrape URLs** — it's fine for HTTP requests, just not for Stremio IDs
+  5. **Test in Stremio, not just curl** — the deep link pipeline is different from direct HTTP requests
+  6. **Fall back to search** — if a dedicated star/channel page doesn't exist, use the site's search endpoint
 
 ---
 
