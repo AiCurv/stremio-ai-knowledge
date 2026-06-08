@@ -322,6 +322,39 @@ A living database of errors encountered during Stremio addon development. Each e
 
 ---
 
+### ERROR #18: %20 (percent-encoded spaces) in Stremio IDs breaks channel navigation
+
+- **Date:** 2026-06-08
+- **Context:** Stremio addon for xxdbx.com (V7.0.0). Star/channel/tag IDs containing spaces like `star_Lacy%20Lamarr` produced by `encodeURIComponent()`.
+- **Symptom:** Clicking any star or channel navigation stream shows "No information found about this" in Stremio. Some tags work (those without spaces like `tag_MILF`) but tags with spaces (like `tag_All%20Sex`) and all stars/channels with spaces fail.
+- **Root Cause:** Stremio's internal URL handling decodes `%20` to a literal space when processing `stremio:///detail/channel/star_Lacy%20Lamarr` deep links. The space then breaks the HTTP request path to the addon (`/meta/channel/star_Lacy Lamarr.json`), causing a parse error or 404. The `encodeURIComponent()` function produces `%20` for spaces, which is standard web encoding but NOT safe for Stremio IDs because Stremio re-decodes them internally.
+- **Fix:** Replace `%20` with `+` (plus sign) in encoded IDs. The `+` character doesn't need URL encoding and survives Stremio's internal URL processing intact:
+  ```javascript
+  // ENCODING — replace %20 with +
+  function enc(str) {
+      return encodeURIComponent(str).replace(/%20/g, "+");
+  }
+  // "Lacy Lamarr" → "Lacy+Lamarr"  (not "Lacy%20Lamarr")
+
+  // DECODING — replace + with %20 before decodeURIComponent
+  function dec(encoded) {
+      return decodeURIComponent(encoded.replace(/\+/g, "%20"));
+  }
+  // "Lacy+Lamarr" → "Lacy Lamarr"
+
+  // This is unambiguous because:
+  // - Spaces are encoded as + (doesn't need URL encoding)
+  // - Literal + in names is encoded as %2B by encodeURIComponent
+  // - The decoder only replaces + (not %2B) with %20
+  ```
+- **Prevention:**
+  1. **NEVER use %20 in Stremio IDs** — Stremio decodes it to a space which breaks the HTTP request
+  2. **Use + for spaces instead** — standard URL query string convention, survives Stremio's URL handling
+  3. **Test with names containing spaces** — always verify with "First Last" style names, not just single-word names
+  4. **This applies to ALL ID types** — stars, channels, tags, dates, any ID that might contain spaces
+
+---
+
 ### ERROR #17: xxdbx.com video detail page has ALL metadata — no embed page needed
 
 - **Date:** 2026-06-07
@@ -354,6 +387,7 @@ A living database of errors encountered during Stremio addon development. Each e
 | 15 | No clickable navigation in streams | Add `externalUrl` streams with stremio:///detail/channel/ deep links |
 | 16 | Base64 IDs break meta handler | Use encodeURIComponent/decodeURIComponent instead of base64 |
 | 17 | Unnecessary embed pages on non-KVS sites | Check site structure first — some sites have everything on /view/{id} |
+| 18 | %20 in Stremio IDs breaks navigation | Replace %20 with + in IDs (encodeURIComponent(str).replace(/%20/g,"+")) |
 
 ---
 
@@ -366,8 +400,8 @@ A living database of errors encountered during Stremio addon development. Each e
 | WordPress | 0 | Low — standard HTML, easy to scrape |
 | Cloudflare-protected | 1 (Error #10) | High — may block requests entirely |
 | Custom content types | 1 (Error #12) | Critical — breaks library + cross-navigation |
-| xxdbx.com (Custom) | 3 (Errors #11, #16, #17) | Medium — stream proxy + URI encoding solves all |
+| xxdbx.com (Custom) | 4 (Errors #11, #16, #17, #18) | Medium — stream proxy + plus-encoded IDs solves all |
 
 ---
 
-*Last updated: 2026-06-07*
+*Last updated: 2026-06-08*

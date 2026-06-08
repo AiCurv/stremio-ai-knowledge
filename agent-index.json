@@ -62,7 +62,8 @@
     "kvs_get_stream_ua_redirect": "KVS /get_stream/ URLs work as direct stream.url \u2014 Stremio's UA triggers 302 CDN redirect. NEVER use externalUrl for video streams.",
     "missing_nav_streams": "Add externalUrl streams with stremio:///detail/channel/ deep links \u2014 meta.links alone is NOT enough. Users navigate from the streams list 95% of the time.",
     "base64_ids_break_meta": "NEVER use base64/base64url for Stremio IDs. Use encodeURIComponent/decodeURIComponent instead. Base64 produces opaque strings that can't be used as URL paths and break the meta handler (Error #16).",
-    "non_kvs_no_embed_needed": "Not all adult sites are KVS. Check site structure first. Some sites (like xxdbx.com) have everything on /view/{id} \u2014 no embed page needed."
+    "non_kvs_no_embed_needed": "Not all adult sites are KVS. Check site structure first. Some sites (like xxdbx.com) have everything on /view/{id} — no embed page needed.",
+    "percent20_in_ids_breaks_nav": "NEVER use %20 in Stremio IDs — Stremio decodes %20 to a literal space which breaks the HTTP request. Use + for spaces: encodeURIComponent(str).replace(/%20/g,'+') and decodeURIComponent(id.replace(/\\+/g,'%20'))."
   },
   "app_limitations": {
     "library_is_manual": "User must explicitly click 'Add to Library' \u2014 there is no programmatic way to add items to a user's library.",
@@ -118,14 +119,19 @@
     }
   },
   "id_encoding": {
-    "rule": "ALWAYS use encodeURIComponent/decodeURIComponent for Stremio IDs that contain names",
+    "rule": "ALWAYS use encodeURIComponent/decodeURIComponent for Stremio IDs that contain names, BUT replace %20 with + to avoid Stremio's internal URL decoding breaking the request",
     "correct": {
-      "encoding": "encodeURIComponent('Della Cate')",
-      "result": "star_Della%20Cate",
-      "decoding": "decodeURIComponent('Della%20Cate')",
+      "encoding": "encodeURIComponent('Della Cate').replace(/%20/g, '+')",
+      "result": "star_Della+Cate",
+      "decoding": "decodeURIComponent('Della+Cate'.replace(/\\+/g, '%20'))",
       "decoded": "Della Cate"
     },
-    "wrong": {
+    "wrong_percent20": {
+      "encoding": "encodeURIComponent('Della Cate')",
+      "result": "star_Della%20Cate",
+      "problem": "Stremio decodes %20 to a literal space internally, which breaks the HTTP request path to the addon"
+    },
+    "wrong_base64": {
       "encoding": "Buffer.from('Della Cate').toString('base64url')",
       "result": "star_RGVsbGEgQ2F0ZQ",
       "problem": "Opaque string, can't be used as URL path, meta handler can't decode it to scrape /stars/Della+Cate"
